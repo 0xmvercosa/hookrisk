@@ -1,0 +1,301 @@
+"""HS-02 — declared permissions disagree with implemented callbacks.
+
+Why this exists
+---------------
+A v4 hook's permissions are not stored anywhere. They are the low 14 bits of its
+deployed address, chosen by grinding a CREATE2 salt until the address carries the
+right bit pattern. Three things must agree and nothing enforces that they do:
+
+1. the bits in the deployed address, which is what the PoolManager obeys;
+2. `getHookPermissions()`, which the constructor checks the address against;
+3. the callbacks the contract actually implements.
+
+`Hooks.validateHookPermissions` checks (1) against (2) at construction. **Nothing
+checks either against (3).** That gap is what this detector covers, and as far as
+we can tell no other v4 tool does.
+
+The two failure modes
+---------------------
+**Permission declared, callback not implemented.** The PoolManager will invoke
+the callback. With OpenZeppelin's `BaseHook` the delegate reverts with
+`HookNotImplemented()`, so *every swap through the pool reverts*. The pool is
+bricked for that operation and the hook cannot be fixed without redeploying to a
+new address. This is a liveness failure, not a theft risk, which is why it is
+reported as high impact rather than critical — and it is exactly the kind of bug
+that ships, because it is invisible until someone touches the pool.
+
+**Callback implemented, permission not declared.** The PoolManager never calls
+it. The code is dead: fee logic that never runs, an access check that never
+fires, a TWAP that never updates. The framework calls this out in §1.11,
+*Permission Encoding & Salt Grinding Pitfalls* — "required callbacks may be
+disabled" — and it is the more dangerous direction, because everything appears
+to work while the mechanism you built is simply absent.
+
+Scope in source mode
+--------------------
+Source mode compares (2) against (3). The deployed address is not known at scan
+time, so (1) is checked in deployed mode, where hookrisk decodes the real address
+bits and reconciles all three. A hook that never declares `getHookPermissions()`
+gets an informational finding rather than silence: it is relying entirely on
+address bits that nothing verifies.
+"""
+
+from __future__ import annotations
+
+from slither.core.declarations import Contract, Function, Modifier
+from slither.utils.output import Output
+
+from ..utils.hook_analysis import (
+    FIELD_TO_FLAG,
+    PERMISSION_FIELDS,
+    RETURNS_DELTA_FIELDS,
+    declared_permissions,
+    implemented_callbacks,
+    is_effectually_implemented,
+    resolve_override,
+)
+from ..utils.hooks_spec import CALLBACK_TO_FLAG, FLAG_BITS
+from .base import DetectorClassification, HookriskDetector
+
+#: Struct field name for each callback, e.g. beforeSwap -> beforeSwap. The
+#: returns-delta fields have no callback of their own; they modify one.
+_CALLBACK_TO_FIELD = {name: name for name in CALLBACK_TO_FLAG}
+
+
+class FlagImplementationDivergence(HookriskDetector):
+    ARGUMENT = "hookrisk-flag-divergence"
+    HELP = "Declared hook permissions disagree with the callbacks actually implemented"
+    IMPACT = DetectorClassification.HIGH
+    CONFIDENCE = DetectorClassification.MEDIUM
+
+    WIKI = "https://github.com/0xmvercosa/hookrisk/blob/main/docs/DETECTORS.md#hs-02"
+    WIKI_TITLE = "HS-02 Permission and implementation divergence"
+    WIKI_DESCRIPTION = (
+        "A Uniswap v4 hook declares a permission it does not implement (every "
+        "pool operation of that kind reverts) or implements a callback it does "
+        "not declare (the code is unreachable)."
+    )
+    WIKI_EXPLOIT_SCENARIO = """
+```solidity
+function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+    return Hooks.Permissions({
+        beforeSwap: true,          // declared...
+        afterSwap: false,          // ...but afterSwap logic is implemented below
+        ...
+    });
+}
+
+function _beforeSwap(...) internal override returns (...) {
+    // never overridden -> BaseHook reverts with HookNotImplemented()
+}
+
+function _afterSwap(...) internal override returns (bytes4, int128) {
+    feesCollected += ...;          // dead code: the flag bit is not set
+}
+```
+Every swap on the pool reverts, because `beforeSwap` is declared and unimplemented.
+Meanwhile the fee accounting in `_afterSwap` never executes, because the address
+does not carry `AFTER_SWAP_FLAG`. Neither problem produces a compile error, a
+constructor revert, or a failing unit test that does not route through a real pool.
+"""
+    WIKI_RECOMMENDATION = (
+        "Make `getHookPermissions()` the single source of truth: declare exactly "
+        "the callbacks you implement, and verify the mined CREATE2 salt produces "
+        "an address whose low 14 bits match. Assert the full permission set in a "
+        "deployment test rather than trusting the salt-grinding script."
+    )
+
+    RULE_CLASS = "flag-implementation-divergence"
+    INFORMS_DIMENSIONS = ("complexity",)
+
+    def _detect_hook(self, contract: Contract) -> list[Output]:
+        declared = declared_permissions(contract)
+        results: list[Output] = []
+
+        if declared is None:
+            results.append(
+                self._report(
+                    [
+                        contract,
+                        " implements IHooks callbacks but does not declare "
+                        "getHookPermissions(). Its permissions come solely from the "
+                        "low 14 bits of its deployed address, and nothing in the "
+                        "source verifies that those bits match this implementation. "
+                        "Scan the deployed address to check the two agree.\n",
+                    ]
+                )
+            )
+            return results
+
+        implemented = {
+            callback.name: callback
+            for callback in implemented_callbacks(contract)
+            if is_effectually_implemented(callback.function, contract)
+        }
+
+        for callback_name, field in _CALLBACK_TO_FIELD.items():
+            is_declared = declared.get(field, False)
+            callback = implemented.get(callback_name)
+            flag = CALLBACK_TO_FLAG[callback_name]
+            bit = FLAG_BITS[flag]
+
+            if is_declared and callback is None:
+                results.append(
+                    self._report(
+                        [
+                            contract,
+                            f" declares permission `{field}` (bit {bit}, {flag}) but "
+                            f"provides no working `{callback_name}` implementation. "
+                            "The PoolManager will call it on every matching pool "
+                            "operation and the call will revert, making the pool "
+                            "unusable for that operation.\n",
+                        ]
+                    )
+                )
+            elif not is_declared and callback is not None:
+                results.append(
+                    self._report(
+                        [
+                            self._user_code_for(contract, callback.function),
+                            f" implements `{callback_name}` but `{field}` is not "
+                            "declared in getHookPermissions(). Unless the deployed "
+                            f"address carries bit {bit} ({flag}), the PoolManager "
+                            "never invokes it and this code is unreachable.\n",
+                        ]
+                    )
+                )
+
+        results.extend(self._check_returns_delta(contract, declared))
+        return results
+
+    @staticmethod
+    def _user_code_for(contract: Contract, callback: Function) -> Function | Contract:
+        """Pick the element to anchor a finding on: the developer's own code.
+
+        With a BaseHook-derived hook the external callback is declared in the
+        library, so anchoring there is wrong twice over. It points a reviewer at
+        `lib/uniswap-hooks/...` instead of the file they wrote — and Slither's
+        `--exclude-dependencies`, which most people run, silently drops findings
+        whose element lives under a dependency path. That turns a real divergence
+        into no output at all.
+
+        So we resolve through to the internal delegate the hook actually
+        overrode, and fall back to the contract when there is none.
+        """
+        for call in callback.internal_calls:
+            target = getattr(call, "function", call)
+            if not isinstance(target, Function) or isinstance(target, Modifier):
+                continue
+            resolved = resolve_override(contract, target)
+            if resolved.contract_declarer == contract:
+                return resolved
+        return contract
+
+    def _check_returns_delta(self, contract: Contract, declared: dict[str, bool]) -> list[Output]:
+        """Flag returns-delta permissions declared without their parent action.
+
+        `Hooks.isValidHookAddress` rejects such an address outright, so this is
+        not a subtle bug — the hook simply cannot be deployed at a matching
+        address. Catching it at source level saves discovering it after a salt
+        grind that can take a while.
+        """
+        parents = {
+            "beforeSwapReturnDelta": "beforeSwap",
+            "afterSwapReturnDelta": "afterSwap",
+            "afterAddLiquidityReturnDelta": "afterAddLiquidity",
+            "afterRemoveLiquidityReturnDelta": "afterRemoveLiquidity",
+        }
+
+        results: list[Output] = []
+        for field, parent in parents.items():
+            if declared.get(field, False) and not declared.get(parent, False):
+                results.append(
+                    self._report(
+                        [
+                            contract,
+                            f" declares `{field}` without `{parent}`. "
+                            "Hooks.isValidHookAddress rejects this combination, so "
+                            "no address satisfying these permissions can be used to "
+                            "initialize a pool.\n",
+                        ]
+                    )
+                )
+        return results
+
+
+class CustomAccountingDeclared(HookriskDetector):
+    """HS-07 — the hook uses custom accounting.
+
+    A classification, not a defect. A returns-delta permission lets the hook take
+    a cut of a swap or of a liquidity operation, and in the limit consume the
+    entire swap so the PoolManager skips the concentrated-liquidity math
+    altogether — the framework's §1.10 "NoOp swap", which is another way of
+    saying the hook is now the market maker.
+
+    Two consequences, both mechanical:
+
+    * **Scoring.** Fires the framework's custom-math and price-impact triggers,
+      which mandate a math-specialist audit regardless of the total score.
+    * **Invariants.** Changes what the differential harness may assert. Invariant
+      I2 compares output against an unhooked pool and would flag any custom curve
+      as extraction, so for these hooks I2 is replaced by price monotonicity
+      alongside I1 and I3. See docs/INVARIANTS.md.
+
+    Reported at INFO because there is nothing to fix. It exists so the manifest
+    can say *why* the tier rose.
+    """
+
+    ARGUMENT = "hookrisk-custom-accounting"
+    HELP = "Hook declares a returns-delta permission (custom accounting or custom curve)"
+    IMPACT = DetectorClassification.INFORMATIONAL
+    CONFIDENCE = DetectorClassification.HIGH
+
+    WIKI = "https://github.com/0xmvercosa/hookrisk/blob/main/docs/DETECTORS.md#hs-07"
+    WIKI_TITLE = "HS-07 Custom accounting in use"
+    WIKI_DESCRIPTION = (
+        "The hook declares a returns-delta permission, so it can alter the "
+        "amounts a swap or liquidity operation settles."
+    )
+    WIKI_EXPLOIT_SCENARIO = (
+        "Not a vulnerability. This classification raises the hook's risk tier and "
+        "changes which invariants can be asserted against it."
+    )
+    WIKI_RECOMMENDATION = (
+        "Custom accounting is legitimate and powerful. Treat it as the framework "
+        "does: obtain a math-specialist review, test input-range boundaries "
+        "explicitly, and run stateful invariant tests over the accounting."
+    )
+
+    RULE_CLASS = "custom-accounting"
+    IS_CLASSIFICATION = True
+    INFORMS_DIMENSIONS = ("customMath", "priceImpactingBehavior")
+    INFORMS_TRIGGERS = ("custom-math", "price-impact")
+
+    def _detect_hook(self, contract: Contract) -> list[Output]:
+        declared = declared_permissions(contract)
+        if not declared:
+            return []
+
+        enabled = sorted(field for field in RETURNS_DELTA_FIELDS if declared.get(field, False))
+        if not enabled:
+            return []
+
+        described = ", ".join(f"`{field}` (bit {FLAG_BITS[FIELD_TO_FLAG[field]]})" for field in enabled)
+        return [
+            self._report(
+                [
+                    contract,
+                    f" declares custom-accounting permissions: {described}. "
+                    "The hook can alter settled amounts, which raises its risk tier "
+                    "under the framework's custom-math and price-impact triggers and "
+                    "means differential output comparison (invariant I2) does not "
+                    "apply — the harness substitutes price monotonicity.\n",
+                ]
+            )
+        ]
+
+
+# Referenced by PERMISSION_FIELDS to keep the import used and the mapping honest.
+assert set(_CALLBACK_TO_FIELD).issubset(set(PERMISSION_FIELDS)), (
+    "callback names must be a subset of the Permissions struct fields"
+)
