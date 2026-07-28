@@ -1,0 +1,47 @@
+# Solidity dependencies are materialised by `make deps` from harness/deps.lock,
+# not committed. The lockfile pins exact commits, so this is reproducible without
+# carrying 62 MB of other people's history in our tree.
+harness/lib/
+corpus/lib
+
+# Upstream checkouts used for reading ground truth during development.
+.vendor/
+
+# Foundry
+out/
+cache/
+broadcast/
+*.gcda
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+# Copied from errors/catalog.json by `make build-detectors`; the canonical file
+# is the one under errors/.
+detectors/slither_hookrisk/data/
+
+# hookrisk output
+hook-risk.json
+hook-risk.invalid.json
+HOOK_RISK.md
+hookrisk.sarif
+hookrisk-debug/
+.hookrisk-cache/
+
+# Local environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
