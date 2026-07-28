@@ -1,0 +1,93 @@
+name: Dogfood
+
+# hookrisk runs its own GitHub Action against its own fixtures, on every change.
+#
+# The CI workflow tests the pieces. This one tests the thing a user actually
+# installs: the composite action, with the same inputs, on a real Foundry
+# project. Plenty of security tools work when their authors run them by hand and
+# break the moment they are wrapped in an action — the toolchain setup differs,
+# the plugin does not register, paths resolve elsewhere. Running it on ourselves
+# is the cheapest way to find that out before a user does.
+#
+# It deliberately scans both a clean hook and a hook with a planted bug, and
+# asserts opposite outcomes. An action that passes everything is
+# indistinguishable from an action that does nothing.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # For SARIF upload to code scanning.
+  security-events: write
+  # For the pull request comment.
+  pull-requests: write
+
+jobs:
+  clean-hook:
+    name: Action on a correct hook (must pass)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build fixtures
+        run: ./scripts/fetch-deps.sh
+
+      - name: hookrisk
+        id: scan
+        uses: ./action
+        with:
+          target: src/good/CleanHook.sol:CleanHook
+          working-directory: corpus
+          fail-on-gate: 'true'
+          # The dynamic layer is exercised in the CI workflow; here we are
+          # testing the action's own wiring, and a few minutes of fuzzing on
+          # every push would make the signal arrive too late to be useful.
+          skip-dynamic: 'true'
+          comment-on-pr: 'false'
+
+      - name: Outputs are populated
+        run: |
+          set -euo pipefail
+          echo "tier=${{ steps.scan.outputs.tier }}"
+          echo "score=${{ steps.scan.outputs.score }}"
+          echo "findings=${{ steps.scan.outputs.findings }}"
+          test "${{ steps.scan.outputs.findings }}" = "0"
+          test "${{ steps.scan.outputs.gate-passed }}" = "true"
+
+  planted-bug:
+    name: Action on a hook with a planted bug (must fail the gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build fixtures
+        run: ./scripts/fetch-deps.sh
+
+      # `fail-on-gate: false` so the step reports rather than stopping the job;
+      # the assertion below is what decides the outcome. Without this the job
+      # would go red for the right reason and look identical to going red for
+      # the wrong one.
+      - name: hookrisk
+        id: scan
+        uses: ./action
+        with:
+          target: src/bad/UnvalidatedCallback.sol:UnvalidatedCallback
+          working-directory: corpus
+          fail-on-gate: 'false'
+          skip-dynamic: 'true'
+          comment-on-pr: 'false'
+          upload-sarif: 'false'
+
+      - name: The gate must have failed
+        run: |
+          set -euo pipefail
+          echo "tier=${{ steps.scan.outputs.tier }}"
+          echo "findings=${{ steps.scan.outputs.findings }}"
+          test "${{ steps.scan.outputs.gate-passed }}" = "false" || {
+            echo "::error::the action passed a hook with unprotected callbacks"; exit 1; }
+          test "${{ steps.scan.outputs.findings }}" -gt "0" || {
+            echo "::error::the action reported no findings on the positive fixture"; exit 1; }

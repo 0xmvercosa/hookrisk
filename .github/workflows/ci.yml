@@ -1,0 +1,167 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Every job here defends a specific property. Where that property is not obvious
+# from the job name, it is stated in a comment — a CI file nobody can reason
+# about gets bypassed the first time it is inconvenient.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FOUNDRY_PROFILE: scan
+
+jobs:
+  # The generated files must match the pinned sources they were generated from.
+  # `hooks_spec.py` carries the flag bits and callback selectors the detectors
+  # key off; a stale one means detectors match nothing and report a clean scan,
+  # which looks exactly like success.
+  generated:
+    name: Generated files are current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: ./scripts/fetch-deps.sh
+      - run: python scripts/gen_hooks_spec.py --core harness/lib/v4-core --check
+      - run: python scripts/gen_error_docs.py --check
+
+  harness:
+    name: Harness (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The generated spec, cross-checked by solc rather than by the regex
+          # parser that produced it.
+          - suite: spec
+            filter: --match-path 'test/HooksSpec.t.sol'
+          # Proof the harness detects: planted-bug hooks must violate I2 and I3.
+          # If these stop failing in the right direction, the harness has gone
+          # blind — a worse regression than a false positive.
+          - suite: detection
+            filter: --match-path 'test/HarnessValidation.t.sol'
+          # A correct hook must satisfy all three invariants.
+          - suite: invariants
+            filter: --match-contract HonestFeeHookInvariants
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - run: ./scripts/fetch-deps.sh
+      - name: forge test
+        working-directory: harness
+        run: forge test ${{ matrix.filter }} -vv
+
+  cli:
+    name: CLI and scoring
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - working-directory: cli
+        run: npm ci
+      - working-directory: cli
+        run: npm run typecheck
+      # Includes the framework's own four worked examples from section 5. If one
+      # fails, our reading of the framework is wrong, not the test.
+      - working-directory: cli
+        run: npm test
+
+  detectors:
+    name: Detectors (corpus gates)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          python -m pip install --quiet 'slither-analyzer>=0.11.5,<0.12'
+          python -m pip install --quiet ./detectors
+      - run: ./scripts/fetch-deps.sh
+
+      - name: Detectors are registered
+        run: slither --list-detectors | grep -q 'hookrisk-'
+
+      # Two gates, and the second matters more. Missing a real bug is bad;
+      # flagging correct code is what gets a security tool switched off. The
+      # negative corpus compiles OpenZeppelin's production AntiSandwichHook and
+      # LiquidityPenaltyHook, so this is not a toy control.
+      - name: Positive corpus must fire
+        working-directory: corpus
+        run: |
+          set -euo pipefail
+          out=$(slither src/bad --detect hookrisk-unprotected-callback,hookrisk-flag-divergence,hookrisk-custom-accounting --exclude-dependencies 2>&1 || true)
+          echo "$out" | tail -20
+          echo "$out" | grep -qE '[1-9][0-9]* result\(s\) found' || {
+            echo "::error::detectors found nothing in the positive corpus"; exit 1; }
+
+      - name: Negative corpus must stay silent
+        working-directory: corpus
+        run: |
+          set -euo pipefail
+          out=$(slither src/good --detect hookrisk-unprotected-callback,hookrisk-flag-divergence,hookrisk-custom-accounting --exclude-dependencies 2>&1 || true)
+          echo "$out" | tail -20
+          echo "$out" | grep -qE '0 result\(s\) found' || {
+            echo "::error::false positive on the negative corpus"; exit 1; }
+
+  end-to-end:
+    name: End-to-end scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: |
+          python -m pip install --quiet 'slither-analyzer>=0.11.5,<0.12' ./detectors
+          ./scripts/fetch-deps.sh
+          cd cli && npm ci --silent && npm run --silent build
+
+      # A correct hook: no findings, invariants hold, gate passes, exit 0.
+      - name: Clean hook passes
+        working-directory: corpus
+        run: |
+          set -euo pipefail
+          forge build
+          node ../cli/dist/cli.js scan src/good/CleanHook.sol:CleanHook --no-gate --verbose
+          test "$(jq -r '.findings | length' hook-risk.json)" = "0"
+          test "$(jq -r '[.invariants[] | select(.status == "failed")] | length' hook-risk.json)" = "0"
+
+      # The hook that documents 1% and charges 3.5%. Structurally flawless, so
+      # static analysis has nothing to say — only the differential harness can
+      # see it. Exit 2 is a gate failure, which is the expected outcome.
+      - name: Skimming hook fails the gate
+        working-directory: harness
+        run: |
+          set +e
+          forge build
+          node ../cli/dist/cli.js scan src/hooks/FeeHooks.sol:SkimmingFeeHook --skip-static --verbose
+          status=$?
+          set -e
+          test "$status" = "2" || { echo "::error::expected exit 2, got $status"; exit 1; }
+          jq -e '[.invariants[] | select(.id == "I2" and .status == "failed")] | length == 1' hook-risk.json
+          jq -e '.gate.passed == false' hook-risk.json
+
+      # The manifest is a published contract; it must satisfy its own schema.
+      - name: Manifest validates against the schema
+        working-directory: corpus
+        run: node ../cli/dist/cli.js scan src/good/CleanHook.sol:CleanHook --no-gate >/dev/null
