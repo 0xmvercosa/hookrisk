@@ -160,7 +160,10 @@ runs:
           echo "tier=$(jq -r '.score.tier' "$manifest")"
           echo "score=$(jq -r '.score.total' "$manifest")"
           echo "inconclusive=$(jq -r '.score.inconclusive' "$manifest")"
-          echo "gate-passed=$(jq -r '.gate.passed // true' "$manifest")"
+          # NOT `.gate.passed // true`. jq's alternative operator falls through
+          # on `false` as well as `null`, so that expression reports a failed
+          # gate as passed — it inverts the one value it exists to read.
+          echo "gate-passed=$(jq -r 'if has("gate") then .gate.passed else true end' "$manifest")"
           echo "findings=$(jq -r '.findings | length' "$manifest")"
           echo "manifest=$manifest"
         } >> "$GITHUB_OUTPUT"
@@ -233,7 +236,7 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
-        passed=$(jq -r '.gate.passed // true' hook-risk.json)
+        passed=$(jq -r 'if has("gate") then .gate.passed else true end' hook-risk.json)
         if [ "$passed" != "true" ]; then
           echo "::error::hookrisk gate failed:"
           jq -r '.gate.failures[] | "::error::  " + .' hook-risk.json
