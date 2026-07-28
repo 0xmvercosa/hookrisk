@@ -1,0 +1,15 @@
+# hookrisk's own harness project, used to dogfood the CLI against the
+# planted-bug hooks. `maxFeeBips = 100` is what SkimmingFeeHook documents;
+# it actually charges 350, and invariant I2 is expected to catch the difference.
+[declared]
+teamMaturity = 3
+tvlPotential = 0
+maxFeeBips = 100
+
+[gate]
+maxTier = "medium"
+maxSeverity = "high"
+
+[engines]
+hookrisk = true
+blocksec = false
