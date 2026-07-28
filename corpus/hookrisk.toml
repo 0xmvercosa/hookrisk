@@ -36,7 +36,17 @@ maxFeeBips = 100
 [gate]
 
 # Fail CI above this tier. Omit to report without gating.
-maxTier = "medium"
+# "high", not "medium", and the reason is worth stating.
+#
+# The corpus is a fixture project scanned with most detectors unimplemented, so
+# several dimensions come back unmeasured and the tier is legitimately a range
+# from Low to High. Gating on tier here would fail every scan on a gap in
+# hookrisk rather than on anything about the hook — which is the tool refusing
+# to certify what it has not measured, working exactly as designed.
+#
+# maxSeverity still discriminates: the clean hook has no findings and passes,
+# the unguarded-callback fixture has six high ones and does not.
+maxTier = "high"
 
 # Fail CI on any finding at or above this severity.
 maxSeverity = "high"

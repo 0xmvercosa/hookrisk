@@ -129,6 +129,11 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
+        # GitHub runs `shell: bash` with -e already set, and `set -uo pipefail`
+        # does not unset it. Without `set +e` the runner aborts here the moment
+        # hookrisk exits 2 — before the handling directly below can run, which
+        # made the step fail for the one outcome it exists to tolerate.
+        set +e
         set -uo pipefail
 
         args=("${{ inputs.target }}")
@@ -146,6 +151,9 @@ runs:
           echo "::error::hookrisk exited $status. See docs/TROUBLESHOOTING.md."
           exit $status
         fi
+
+        # From here on a failure is ours, not the scan's.
+        set -e
 
         manifest="$(pwd)/hook-risk.json"
         {
