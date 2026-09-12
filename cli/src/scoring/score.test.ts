@@ -612,6 +612,45 @@ describe('complexity derived from hook-profile', () => {
     assert.deepEqual(input.evidence, [], 'usesReturnsDelta is a metric, not the custom-accounting finding');
   });
 
+  test('the rubric refuses a findingDerivation rule that names an unknown attribute', () => {
+    const broken = structuredClone(rubric);
+    // A class of its own: an unconditional rule already closes
+    // external-call-in-swap-path, and that check fires first.
+    broken.dimensions.find((d) => d.id === 'externalDependencies')!.findingDerivation!.rules.push({
+      ruleClass: 'upgradeable-hook',
+      score: 3,
+      when: 'destinationIsUpgradeable',
+      rationale: 'x',
+    });
+    const path = join(tmpdir(), `hookrisk-rubric-attr-${process.pid}.json`);
+    writeFileSync(path, JSON.stringify(broken));
+    try {
+      assert.throws(() => loadRubric(path), /unknown attribute 'destinationIsUpgradeable'/);
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+
+  test('the rubric refuses a findingDerivation rule that can never be reached', () => {
+    // The 2 rule for external-call-in-swap-path is unconditional, so anything
+    // written after it for that class is dead. A dead rule in a scoring table
+    // reads as policy and never runs.
+    const broken = structuredClone(rubric);
+    broken.dimensions.find((d) => d.id === 'externalDependencies')!.findingDerivation!.rules.push({
+      ruleClass: 'external-call-in-swap-path',
+      score: 3,
+      when: 'severityRank >= 4',
+      rationale: 'x',
+    });
+    const path = join(tmpdir(), `hookrisk-rubric-dead-${process.pid}.json`);
+    writeFileSync(path, JSON.stringify(broken));
+    try {
+      assert.throws(() => loadRubric(path), /unreachable rule for 'external-call-in-swap-path'/);
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+
   test('the rubric refuses a derivation rule that names an unknown metric', () => {
     const broken = structuredClone(rubric);
     broken.dimensions.find((d) => d.id === 'complexity')!.derivation!.rules.push({ score: 2, when: 'branchesOnState >= 1', rationale: 'x' });
@@ -622,5 +661,183 @@ describe('complexity derived from hook-profile', () => {
     } finally {
       rmSync(path, { force: true });
     }
+  });
+});
+
+// --------------------------------------------------------------------------- //
+// The dimensions HS-03, HS-05 and HS-06 unlocked
+//
+// Each of the three detectors raises one dimension when it fires, and leaves it
+// unmeasured when it does not: each one's blind spot coincides with its
+// dimension's lowest brackets, so silence cannot establish a 0. The brackets
+// and the reasons live in schema/framework-rubric.json, marked as
+// interpretation; these tests pin the numbers the rubric records.
+// --------------------------------------------------------------------------- //
+
+describe('dimensions raised by the new detectors', () => {
+  const dimensionIds = rubric.dimensions.map((d) => d.id);
+  const hookrisk: EngineResult = { engine: 'hookrisk', version: 't', status: 'ok', findings: [], durationMs: 1 };
+
+  const hit = (ruleClass: RuleClass, overrides: Partial<Finding> = {}): Finding => ({
+    id: `${ruleClass}-1`,
+    ruleClass,
+    title: `${ruleClass} title`,
+    description: 'd',
+    severity: 'high',
+    confidence: 'medium',
+    location: { file: 'src/MyHook.sol', line: 12 },
+    evidence: [],
+    engines: [{ engine: 'hookrisk', nativeRule: 'r', severity: 'high', confidence: 'medium' }],
+    ...overrides,
+  });
+
+  const dimension = (id: string, findings: Finding[], declared = {}) =>
+    deriveScoringInput({ findings, engineResults: [hookrisk], declared, dimensionIds }).dimensions[id]!;
+
+  describe('autonomousParameterUpdates from HS-03', () => {
+    test('an unguarded mutator (HIGH) scores 2 and quotes the rubric’s reasoning', () => {
+      const d = dimension('autonomousParameterUpdates', [hit('admin-surface', { discriminator: 'setFee' })]);
+      assert.equal(d.source, 'measured');
+      assert.equal(d.value, 2);
+      assert.ok(d.evidence?.some((e) => e.includes("anybody can move the hook's parameters")), d.evidence?.join(' | '));
+      assert.ok(d.evidence?.some((e) => e.includes('hookrisk’s interpretation')), d.evidence?.join(' | '));
+    });
+
+    test('an owner-only mutator (MEDIUM) scores 1, the floor', () => {
+      const d = dimension('autonomousParameterUpdates', [hit('admin-surface', { severity: 'medium', discriminator: 'setFee' })]);
+      assert.equal(d.value, 1);
+      assert.ok(d.evidence?.some((e) => e.includes("cannot see the owner's guardrails")), d.evidence?.join(' | '));
+    });
+
+    test('the worst finding decides when both shapes are present', () => {
+      const d = dimension('autonomousParameterUpdates', [
+        hit('admin-surface', { id: 'a', severity: 'medium', discriminator: 'setFee' }),
+        hit('admin-surface', { id: 'b', severity: 'high', discriminator: 'register' }),
+      ]);
+      assert.equal(d.value, 2);
+    });
+
+    test('silence leaves it unmeasured: HS-03 measures the admin surface, not autonomy', () => {
+      const d = dimension('autonomousParameterUpdates', []);
+      assert.equal(d.source, 'unmeasured');
+      assert.equal(d.value, undefined);
+      assert.ok(d.evidence?.[0]?.includes('measures the admin surface, not autonomy'), d.evidence?.join(' | '));
+    });
+
+    test('a declaration still wins, and says the tool could not measure it', () => {
+      const d = dimension('autonomousParameterUpdates', [], { autonomousParameterUpdates: 3 });
+      assert.equal(d.source, 'declared');
+      assert.equal(d.value, 3);
+      assert.ok(d.evidence?.[0]?.startsWith('Not measurable'), d.evidence?.join(' | '));
+    });
+  });
+
+  describe('externalDependencies from HS-05', () => {
+    test('a call that can write scores 2', () => {
+      const d = dimension('externalDependencies', [hit('external-call-in-swap-path', { severity: 'medium', metrics: { isStatic: false } })]);
+      assert.equal(d.value, 2);
+      assert.equal(d.source, 'measured');
+    });
+
+    test('a static read scores 1 and says it is a floor', () => {
+      const d = dimension('externalDependencies', [hit('external-call-in-swap-path', { severity: 'medium', metrics: { isStatic: true } })]);
+      assert.equal(d.value, 1);
+      assert.ok(d.evidence?.some((e) => e.includes('as a floor')), d.evidence?.join(' | '));
+    });
+
+    test('a finding with no isStatic metric scores 2, the direction that does not understate', () => {
+      const d = dimension('externalDependencies', [hit('external-call-in-swap-path', { severity: 'medium' })]);
+      assert.equal(d.value, 2);
+    });
+
+    test('the worst call decides when a hook makes both kinds', () => {
+      const d = dimension('externalDependencies', [
+        hit('external-call-in-swap-path', { id: 'a', severity: 'medium', metrics: { isStatic: true } }),
+        hit('external-call-in-swap-path', { id: 'b', severity: 'medium', metrics: { isStatic: false } }),
+      ]);
+      assert.equal(d.value, 2);
+    });
+
+    test('silence leaves it unmeasured: HS-05 never looks outside the swap path', () => {
+      const d = dimension('externalDependencies', []);
+      assert.equal(d.source, 'unmeasured');
+      assert.ok(d.evidence?.[0]?.includes('only looks there'), d.evidence?.join(' | '));
+    });
+  });
+
+  describe('priceImpactingBehavior from HS-06', () => {
+    test('an unbounded dynamic fee scores 2, one bracket below its own title', () => {
+      const d = dimension('priceImpactingBehavior', [hit('unbounded-dynamic-fee', { severity: 'medium' })]);
+      assert.equal(d.value, 2);
+      assert.ok(d.evidence?.some((e) => e.includes('evidence is negative')), d.evidence?.join(' | '));
+    });
+
+    test('a returns-delta still outranks it', () => {
+      const d = dimension('priceImpactingBehavior', [
+        hit('unbounded-dynamic-fee', { id: 'a', severity: 'medium' }),
+        hit('custom-accounting', { id: 'b', severity: 'info' }),
+      ]);
+      assert.equal(d.value, 3);
+    });
+
+    test('it fires the dynamic-fee trigger evidence', () => {
+      const input = deriveScoringInput({
+        findings: [hit('unbounded-dynamic-fee', { severity: 'medium' })],
+        engineResults: [hookrisk],
+        declared: {},
+        dimensionIds,
+      });
+      assert.ok(input.evidence?.includes('dynamic-fee-pool'), JSON.stringify(input.evidence));
+    });
+
+    test('silence leaves it unmeasured: a fee within a ceiling fires nothing', () => {
+      const d = dimension('priceImpactingBehavior', []);
+      assert.equal(d.source, 'unmeasured');
+      assert.ok(d.evidence?.[0]?.includes('within a ceiling'), d.evidence?.join(' | '));
+    });
+  });
+
+  describe('the harness as a coverage source', () => {
+    test('an ok harness counts as having looked, so its classes are covered', () => {
+      const { looked, declined } = enginesThatLooked([hookrisk], [], { status: 'ok' });
+      assert.deepEqual([...looked].sort(), ['harness', 'hookrisk']);
+      assert.equal(declined.size, 0);
+    });
+
+    test('a failed harness disclaims, with the reason a dimension would quote', () => {
+      const { looked, declined } = enginesThatLooked([hookrisk], [], {
+        status: 'failed',
+        reason: 'setUp reverted: InvalidInitializer() (HR-E304)',
+      });
+      assert.ok(!looked.has('harness'));
+      assert.match(declined.get('harness') ?? '', /failed before its probes could observe the hook \(setUp reverted/);
+    });
+
+    test('a skipped harness neither looked nor disclaimed', () => {
+      const { looked, declined } = enginesThatLooked([hookrisk], [], { status: 'skipped', reason: '--skip-dynamic' });
+      assert.ok(!looked.has('harness'));
+      assert.equal(declined.size, 0);
+    });
+
+    test('without a harness summary the scorer assumes nothing', () => {
+      const { looked } = enginesThatLooked([hookrisk], []);
+      assert.ok(!looked.has('harness'));
+    });
+
+    test('the harness-sourced classes score no dimension', () => {
+      // `unvalidated-pool-key` is a classification and `callback-selector-mismatch`
+      // is a defect the framework has no dimension for: both must reach the
+      // report without moving a number.
+      const withProbes = deriveScoringInput({
+        findings: [hit('unvalidated-pool-key', { severity: 'info' }), hit('callback-selector-mismatch')],
+        engineResults: [hookrisk],
+        declared: {},
+        dimensionIds,
+        harness: { status: 'ok' },
+      });
+      const bare = deriveScoringInput({ findings: [], engineResults: [hookrisk], declared: {}, dimensionIds, harness: { status: 'ok' } });
+      assert.deepEqual(withProbes.dimensions, bare.dimensions);
+      assert.deepEqual(withProbes.evidence, bare.evidence);
+    });
   });
 });

@@ -293,6 +293,90 @@ describe('buildManifest', () => {
     assert.doesNotThrow(() => validateManifest(manifest));
   });
 
+  test('a harness-sourced finding and the probe record validate', () => {
+    // The two classes the probes produce carry no hookrisk attribution at all:
+    // nothing read the source to reach them. The schema has to accept an
+    // engine it has never seen a detector for, and the probe record the
+    // harness writes at the end of setUp.
+    const manifest = buildManifest(
+      inputs({
+        findings: [
+          finding({
+            id: 'probe-1',
+            ruleClass: 'callback-selector-mismatch',
+            title: 'afterSwap did not return its own selector',
+            description: 'Called as the PoolManager, afterSwap returned 0x00000000.',
+            discriminator: 'afterSwap',
+            severity: 'high',
+            evidence: ['selector probe: afterSwap returned 0x00000000, expected 0xb47b2fb1'],
+            engines: [{ engine: 'harness', nativeRule: 'selector-probe', severity: 'high', confidence: 'high' }],
+          }),
+          finding({
+            id: 'probe-2',
+            ruleClass: 'unvalidated-pool-key',
+            title: 'The hook accepted a callback for a pool it is not attached to',
+            description: 'A second pool with the same hook was initialised; beforeSwap accepted its key.',
+            severity: 'info',
+            location: { file: 'src/MyHook.sol', line: 1 },
+            function: undefined,
+            discriminator: undefined,
+            evidence: ['exclusivity probe: accepted (drove beforeSwap as the PoolManager)'],
+            engines: [{ engine: 'harness', nativeRule: 'pool-exclusivity-probe', severity: 'info', confidence: 'high' }],
+          }),
+          // The same missing guard seen twice: HS-01 read it, the probe called
+          // it. One finding, two attributions.
+          finding({
+            id: 'merged-1',
+            engines: [
+              { engine: 'hookrisk', nativeRule: 'hookrisk-unprotected-callback', severity: 'high', confidence: 'medium' },
+              { engine: 'harness', nativeRule: 'eoa-guard-probe', severity: 'high', confidence: 'high' },
+            ],
+          }),
+        ],
+        permissions: {
+          harnessRun: {
+            flags: 0x0cc0,
+            permissionsDerived: true,
+            customCurve: false,
+            dynamicFee: false,
+            seeded: 'both',
+            probes: {
+              eoaGuard: { beforeSwap: 'unguarded', afterSwap: 'guarded', beforeInitialize: 'reverted-other' },
+              exclusivity: 'accepted',
+              exclusivityReason: 'drove beforeSwap with the second pool’s key',
+              selectors: { beforeSwap: 'ok', afterSwap: 'wrong-selector' },
+            },
+          },
+        },
+      }),
+    );
+
+    assert.doesNotThrow(() => validateManifest(manifest));
+
+    const report = renderMarkdown(manifest);
+    assert.match(report, /P-02 `callback-selector-mismatch`/);
+    assert.match(report, /Observed by the differential harness running the hook \(`harness\/selector-probe`\)\./);
+    assert.match(
+      report,
+      /Observed by the differential harness running the hook \(`harness\/eoa-guard-probe`\), and reported from source by `hookrisk\/hookrisk-unprotected-callback`\./,
+    );
+    // A classification never joins the defect table.
+    assert.match(report, /\| P-01 `unvalidated-pool-key` \| The hook accepted a callback for a pool it is not attached to \|/);
+  });
+
+  test('the schema stays strict: an unknown probe verdict is rejected', () => {
+    const manifest = buildManifest(
+      inputs({
+        permissions: {
+          harnessRun: { flags: 0, seeded: 'both', probes: { eoaGuard: { beforeSwap: 'unguarded' } } },
+        },
+      }),
+    );
+    ((((manifest.permissions as Record<string, unknown>).harnessRun as Record<string, unknown>).probes as Record<string, unknown>)
+      .eoaGuard as Record<string, unknown>).beforeSwap = 'probably-fine';
+    assert.throws(() => validateManifest(manifest), /HR-E501|does not satisfy/);
+  });
+
   test('the schema stays strict: an unknown observation key is rejected', () => {
     const manifest = buildManifest(inputs({ observations: { swapsExecuted: 1 } }));
     (manifest.coverage as Record<string, unknown>).observations = { swapsExecuted: 1, extra: 2 };

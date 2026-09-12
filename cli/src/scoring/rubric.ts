@@ -51,6 +51,48 @@ export interface Dimension {
    * reviewer should be able to audit it without reading TypeScript.
    */
   derivation?: Derivation;
+  /**
+   * How a *finding* of a given rule class scores this dimension, when the score
+   * depends on the finding's shape rather than only on its class. Kept in the
+   * rubric for the same reason the brackets are: "an unguarded mutator is a 2
+   * and an owner-only one a 1" is hookrisk's reading of the framework's prose,
+   * and a reviewer must be able to audit it without reading TypeScript.
+   *
+   * Classes whose score does not vary stay in `derive.ts`'s flat table.
+   */
+  findingDerivation?: FindingDerivation;
+}
+
+/** One rule of a {@link FindingDerivation}. */
+export interface FindingDerivationRule {
+  /** The rule class this applies to; other classes skip it. */
+  ruleClass: string;
+  score: number;
+  /**
+   * Guard over the finding's attributes, same grammar as
+   * {@link DerivationRule.when}. Absent means "always", which is how a class
+   * with a single fixed score is written.
+   */
+  when?: string;
+  rationale: string;
+}
+
+export interface FindingDerivation {
+  /** True when the class-to-score mapping is hookrisk's reading, not the framework's. */
+  interpretation: boolean;
+  /**
+   * Attribute names the rules may reference: `severityRank` plus whatever the
+   * finding's `metrics` carry. Booleans are readable both as a bare name and
+   * as `name == 1` / `name == 0`, so a rule can test the negative without the
+   * grammar growing a `!` operator.
+   */
+  attributes: string[];
+  /**
+   * Evaluated in the order written — unlike {@link Derivation}, which is
+   * highest-score-first — because a class's last rule is usually its
+   * unconditional fallback and a highest-first sweep would reach it too early.
+   */
+  rules: FindingDerivationRule[];
 }
 
 /** One rule of a {@link Derivation}: the first rule whose `when` holds wins. */
@@ -164,6 +206,7 @@ function validate(rubric: Rubric, source: string): void {
       }
     }
     if (dimension.derivation) validateDerivation(dimension, fail);
+    if (dimension.findingDerivation) validateFindingDerivation(dimension, fail);
   }
 
   // Tiers must tile the whole range with no gap and no overlap, or some totals
@@ -218,6 +261,47 @@ function validateDerivation(dimension: Dimension, fail: (message: string) => nev
     for (const name of rule.when.match(/[A-Za-z_]\w*/g) ?? []) {
       if (!known.has(name)) {
         fail(`dimension '${dimension.id}' derivation rule for ${rule.score} references unknown metric '${name}'`);
+      }
+    }
+  }
+}
+
+/**
+ * The same guarantees as {@link validateDerivation}, plus one specific to
+ * ordered rules: a rule that can never be reached is a rubric bug that reads
+ * as a policy. An unconditional rule ends its class, so anything written after
+ * it for that class is dead and refuses to load.
+ */
+function validateFindingDerivation(dimension: Dimension, fail: (message: string) => never): void {
+  const derivation = dimension.findingDerivation!;
+  if (!derivation.rules?.length) fail(`dimension '${dimension.id}' has a findingDerivation with no rules`);
+  const known = new Set(derivation.attributes ?? []);
+  const closed = new Set<string>();
+  for (const rule of derivation.rules) {
+    if (!rule.ruleClass?.trim()) fail(`dimension '${dimension.id}' findingDerivation rule has no ruleClass`);
+    if (!Number.isInteger(rule.score) || rule.score < dimension.min || rule.score > dimension.max) {
+      fail(
+        `dimension '${dimension.id}' findingDerivation rule for ${rule.ruleClass} scores ${rule.score}, outside ${dimension.min}-${dimension.max}`,
+      );
+    }
+    if (!rule.rationale?.trim()) {
+      fail(`dimension '${dimension.id}' findingDerivation rule for ${rule.ruleClass} has no rationale`);
+    }
+    if (closed.has(rule.ruleClass)) {
+      fail(
+        `dimension '${dimension.id}' findingDerivation has an unreachable rule for '${rule.ruleClass}': an earlier rule for that class is unconditional`,
+      );
+    }
+    if (rule.when === undefined) {
+      closed.add(rule.ruleClass);
+      continue;
+    }
+    if (!rule.when.trim()) fail(`dimension '${dimension.id}' findingDerivation rule for ${rule.ruleClass} has an empty condition`);
+    for (const name of rule.when.match(/[A-Za-z_]\w*/g) ?? []) {
+      if (!known.has(name)) {
+        fail(
+          `dimension '${dimension.id}' findingDerivation rule for ${rule.ruleClass} references unknown attribute '${name}'`,
+        );
       }
     }
   }

@@ -162,7 +162,37 @@
         { "score": 1, "label": "One immutable, trusted dependency read outside the swap path" },
         { "score": 2, "label": "A dependency read inside the swap path, or more than one dependency" },
         { "score": 3, "label": "Cross-chain or off-chain data, or a dependency that can be replaced" }
-      ]
+      ],
+      "$comment_findingDerivation": [
+        "HS-05 reports one finding per external call inside the swap path whose",
+        "destination is neither the PoolManager nor one of the pair's tokens.",
+        "The score depends on the call's kind, which the detector carries on the",
+        "finding as `metrics.isStatic`. Rules are read in the order written; the",
+        "first whose class and condition match wins, and a rule with no `when`",
+        "is that class's fallback.",
+        "",
+        "Silence does not measure this dimension. HS-05 never looks outside the",
+        "swap path, and 'one immutable, trusted dependency read outside the swap",
+        "path' is the framework's own 1 bracket — so a hook with an oracle read",
+        "in afterInitialize and none in beforeSwap is a 1 that HS-05 cannot see."
+      ],
+      "findingDerivation": {
+        "interpretation": true,
+        "attributes": ["severityRank", "isStatic"],
+        "rules": [
+          {
+            "ruleClass": "external-call-in-swap-path",
+            "score": 1,
+            "when": "isStatic == 1",
+            "rationale": "A staticcall inside the swap path cannot write to the dependency or reenter the PoolManager, so the swap depends on the dependency's value but not on its behaviour. Scored 1, 'one immutable, trusted dependency', as a floor: the framework's 2 bracket says 'a dependency read inside the swap path' without qualifying the call kind, so a reviewer who finds the dependency replaceable should declare 2 or 3."
+          },
+          {
+            "ruleClass": "external-call-in-swap-path",
+            "score": 2,
+            "rationale": "The framework's 2 bracket verbatim: a dependency read inside the swap path. Unconditional, so a finding whose call kind the detector did not classify also scores 2 — the direction that does not understate risk."
+          }
+        ]
+      }
     },
     {
       "id": "externalLiquidityExposure",
@@ -243,7 +273,40 @@
         { "score": 1, "label": "Self-adjusting within hard-coded bounds and a rate limit" },
         { "score": 2, "label": "Self-adjusting with bounds but no rate limit, or vice versa" },
         { "score": 3, "label": "Self-adjusting with neither bounds nor rate limiting" }
-      ]
+      ],
+      "$comment_findingDerivation": [
+        "HS-03 measures the *privileged* surface — who may change what — while",
+        "this dimension asks about *autonomy*. The two overlap where the",
+        "framework's guardrails do: a parameter that can move without bounds or",
+        "a rate limit. The mapping below is hookrisk's reading of that overlap,",
+        "and it is a floor in both branches: HS-03 cannot see a fee the hook",
+        "recomputes from its own state inside a callback, which is the shape the",
+        "3 bracket describes, so silence from HS-03 leaves the dimension",
+        "unmeasured rather than 0 (see derive.ts)."
+      ],
+      "findingDerivation": {
+        "interpretation": true,
+        "attributes": ["severityRank"],
+        "rules": [
+          {
+            "ruleClass": "admin-surface",
+            "score": 2,
+            "when": "severityRank >= 3",
+            "rationale": "HS-03 at HIGH is an unguarded state-changing external function: anybody can move the hook's parameters, so no access control enforces bounds or a rate limit. Scored 2 rather than 3 because the 3 bracket describes a hook that adjusts itself — here a caller still has to act — and never 0, because 0 is 'all parameters set by an explicit privileged call' and an unguarded call is not privileged."
+          },
+          {
+            "ruleClass": "admin-surface",
+            "score": 1,
+            "when": "severityRank >= 2",
+            "rationale": "HS-03 at MEDIUM is an owner-only mutator (hook-profile.hasOwnerOnlyFunctions). The framework's 0 bracket describes exactly this shape, but scoring 0 would rank a hook whose owner can move the fee level with a hook that has no parameters at all, and source analysis cannot see the owner's guardrails — timelock, ceiling, multisig. 1 records the surface as a floor without asserting autonomy; a team that has a timelock should declare 0 in hookrisk.toml."
+          },
+          {
+            "ruleClass": "admin-surface",
+            "score": 1,
+            "rationale": "An admin-surface finding below MEDIUM still evidences a parameter surface whose guardrails were not verified; the same floor applies."
+          }
+        ]
+      }
     },
     {
       "id": "priceImpactingBehavior",
@@ -258,7 +321,24 @@
         { "score": 1, "label": "Charges a fixed, declared fee" },
         { "score": 2, "label": "Adjusts the LP fee dynamically within a declared ceiling" },
         { "score": 3, "label": "Returns a swap delta (custom curve or NoOp), or adjusts fees without a ceiling" }
-      ]
+      ],
+      "$comment_findingDerivation": [
+        "`custom-accounting` keeps its flat score in derive.ts (3, the bracket",
+        "verbatim). Only HS-06 needs a rationale recorded here, because the",
+        "number it produces is deliberately one bracket below the one its own",
+        "title suggests."
+      ],
+      "findingDerivation": {
+        "interpretation": true,
+        "attributes": ["severityRank"],
+        "rules": [
+          {
+            "ruleClass": "unbounded-dynamic-fee",
+            "score": 2,
+            "rationale": "HS-06's evidence is negative — it did not find a bound on a fee the hook sets dynamically. The 3 bracket ('adjusts fees without a ceiling') asserts that no ceiling exists anywhere, which a source detector cannot establish: a ceiling in the controller, in a library the detector did not resolve, or enforced off-chain is invisible to it. So the measured value is the 2 bracket, 'adjusts the LP fee dynamically', and the missing ceiling is reported as the finding itself. A reviewer who confirms there is no ceiling should declare 3."
+          }
+        ]
+      }
     }
   ],
 

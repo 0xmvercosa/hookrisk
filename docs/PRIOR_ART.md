@@ -108,29 +108,112 @@ should be an explicit choice rather than something a scan does quietly. See
 
 ---
 
-## Hacken uni-v4-hooks-checker
+## Hacken: the audit guide and uni-v4-hooks-checker
 
-[github.com/hknio/uni-v4-hooks-checker](https://github.com/hknio/uni-v4-hooks-checker)
+[hacken.io/discover/auditing-uniswap-v4-hooks](https://hacken.io/discover/auditing-uniswap-v4-hooks/) ·
+[github.com/hknio/uni-v4-hooks-checker](https://github.com/hknio/uni-v4-hooks-checker) (MIT)
 
-Listed in the Foundation's own framework, §11 Security Resources.
+The checker is listed in the Foundation's own framework, §11 Security Resources.
+The article is the better half: a seven-step audit method with twenty-one named
+issue classes, several of which are not in any tool's rule set — delta sign
+conventions (`BeforeSwapDelta` is written from the hook's perspective, so a fee
+is negative), unsettled deltas producing `CurrencyNotSettled`, a hook changing
+the swap type and hitting `HookDeltaExceedsSwapAmount`, an `lpFeeOverride` the
+PoolManager rejects, and NoOp hooks taking full custody of a swap.
 
-A Foundry test framework: suites for swaps, liquidity, donate, initialize, hook
-introspection, delta effects, authorization. You point it at your hook and extend
-it.
+The checker itself is a Foundry suite you point at a **deployed** hook (or one
+you deploy in a test) and extend: address-flag/permission agreement, an EOA-guard
+sweep over the entrypoints, a foreign-`PoolKey` rejection test, an open-mutator
+scan over eight hard-coded selectors, a "returns its own selector when called by
+the manager" check, swap/liquidity/donate suites, bytecode-size complexity
+buckets, and per-check strictness flags.
 
-Genuinely complementary, and the distinction is about *when*:
+Three of its ideas are in hookrisk as of this pass, re-implemented from the
+described behaviour rather than ported — their tests are entangled with their own
+`TestResultCollector`/`Caps`/`StrictConfig` types, and two of those files carry
+an in-file `SPDX-License-Identifier: UNLICENSED` that contradicts the repository's
+MIT `LICENSE`, which is a provenance question hookrisk should not import:
+
+| Their check | hookrisk's version |
+|---|---|
+| EOA guard on entrypoints | The harness's `eoaGuard` probe. Where HS-01 already reports the callback, the probe merges into it as a second attribution and raises confidence to high — a static reading and an executed counterexample for the same defect |
+| Untrusted `PoolKey` rejection | The harness's exclusivity probe: a second pool with the same hook, driven as the PoolManager. Reported as the INFO classification `unvalidated-pool-key`, scoring nothing — multi-pool hooks are legitimate, and their own default is non-strict |
+| Returns its own selector | The harness's selector probe, one pranked call per implemented callback. HIGH `callback-selector-mismatch`, because a callback that returns the wrong selector bricks the operation it guards |
+
+Their open-mutator scan is the idea behind HS-03, but done differently: they
+test eight hard-coded selectors, hookrisk resolves the contract's own external
+functions through SlithIR and asks which of them write hook state without an
+access check.
+
+Where the two tools genuinely differ:
 
 |  | Hacken checker | hookrisk |
 |---|---|---|
 | Shape | A test suite you extend | A scan you run |
-| Effort | Write test code | `npx hookrisk scan` |
-| Depth | Whatever you write | Fixed invariants |
-| Output | Pass/fail | Scored manifest, SARIF, gate |
-| When | While building | On every commit |
+| Input | A deployed address plus a test contract you write | `src/MyHook.sol:MyHook` |
+| Counterfactual | None — it can see that a swap succeeded, never that it returned the *right* amount | The twin pool: I2 bounds extraction by the declared fee, which is how a hook that documents 1% and charges 3.5% is caught |
+| Output | Pass/fail | Scored manifest, SARIF, line numbers, gate exit code |
+| Vacuous passes | Not detected — their `_hasFunction` returns true for any address with code, so the introspection suite warns about "10 external mutators" on every hook | `coverage.observations` marks a zero-observation pass inconclusive |
 
-If you are building a hook and want to reason about a specific behaviour, theirs
-is the better tool. If you want a number in CI that gets worse when your hook
-does, ours is.
+---
+
+## chaosxcode/hookguard
+
+[github.com/chaosxcode/hookguard](https://github.com/chaosxcode/hookguard) (MIT)
+
+Python, zero dependencies, three layers: a source scanner, a runtime-bytecode
+pass, and an ecosystem census. Its source scanner is regex over comment-stripped
+text with a hand-rolled brace matcher — no solc, no AST, no compile step — with a
+JS port that runs the same rules in the browser. The other two layers are the
+interesting half.
+
+**What hookrisk took (the ideas, not the code):**
+
+- **`UNBOUNDED_DYNAMIC_FEE` → HS-06.** Their rule is two regexes (the file
+  mentions `updateDynamicLPFee` and matches none of `MAX_FEE|maxFee|require(…fee <`),
+  and it fires on 11% of the hooks in their corpus. The class is real; hookrisk
+  does it structurally, tracing the provenance of the fee value to a bound or a
+  constant, and scores it 2 rather than 3 because a detector cannot prove the
+  absence of a ceiling.
+- **`REVERT_DOS_RISK` → the framing for HS-05.** hookrisk already had the
+  machinery (`external_calls_in`, `swap_path_functions`, an `ExternalCall` with
+  destination, line and `is_static`) and was not using it. Their contribution is
+  the reading: an unhandled external call in a *required* callback is a liveness
+  risk, not only a dependency.
+- **The bytecode layer, as a design for deployed mode.** An EIP-1967 slot read,
+  the EIP-1167 pattern, and classifying a `DELEGATECALL` target as constant or
+  storage-derived give an upgradeability signal with no Docker and no API key —
+  which is exactly the BlockSec dependency hookrisk wants out of CI. Recorded in
+  `docs/hackathon/RESUME.md` under *Deployed mode design*.
+- **The reversed permission bits.** Their dual-decoding of the Unichain preview
+  PoolManager is a measurement, not code: the ten callback flags decode in the
+  opposite order there, and the returns-delta positions match neither layout. A
+  per-chain bit-layout table is now a precondition for deployed mode.
+
+**What hookrisk does not take.** `UPGRADEABLE_HOOK` is one regex over the whole
+file — `delegatecall` anywhere makes a hook HIGH. `MISSING_POOLMANAGER_GUARD`, the
+class HS-01 covers, is skipped entirely when the `is` clause matches `BaseHook`,
+which silences it on exactly the vendored-or-fake-base case HS-01 exists for, and
+accepts a modifier *named* "poolManager" as proof of a guard; it reports zero
+findings across their own 291-hook corpus. And their 0–100 score is additive and
+prices *absence* (`no_audit_recorded` +10, `unregistered` +8) while its own
+documentation says it makes no deductions for absent evidence — the contradiction
+hookrisk's unmeasured-is-not-zero exists to avoid.
+
+**The one thing they have done that hookrisk has not: measured the ecosystem.**
+A full-history `Initialize` census per chain, per-rule firing rates over a
+306-contract corpus with eight documented false-positive classes, and the finding
+that **only about 17% of the busiest off-registry hooks publish source at all**.
+That number is the ceiling on hookrisk's entire method: source-level analysis,
+however good, reaches at most that fraction of deployed hooks without a
+bytecode layer. It is the strongest argument for the bytecode work above, and
+for `hooklist` plus Sourcify as the seed of deployed mode rather than a crawl.
+
+Their permissionless-attachment rule (`PERMISSIONLESS_ATTACHMENT`) is the class
+hookrisk now covers dynamically as `unvalidated-pool-key`, from the other
+direction: they infer from five enumerated regex spellings of "the hook checks
+the key", the harness calls the hook with a foreign key and reports what
+happened.
 
 ---
 
