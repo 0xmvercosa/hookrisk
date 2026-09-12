@@ -132,6 +132,29 @@ export function classify(text: string): ErrorSpec | null {
   return null;
 }
 
+/** A catalogue code already embedded in a rendered message. */
+const EMBEDDED_CODE = /\bHR-E\d{3}\b/;
+
+/**
+ * The catalogue code for a failure, or undefined when nothing matches.
+ *
+ * Companion to {@link describeFailure}, which produces prose for a human. This
+ * produces the identifier a machine branches on: `engines[].errorCode` in the
+ * manifest, `errorCode` in a `--log-json` line, a CI job asserting *which*
+ * failure it got rather than that it got one.
+ *
+ * It reads an already-rendered reason first. Engine reasons come from
+ * `describeFailure`, so they open with the code; re-running the match regexes
+ * over that text would re-derive it from a paraphrase and can land somewhere
+ * else, which is how a single failure ends up with two names.
+ */
+export function errorCodeFor(output: string | undefined): string | undefined {
+  if (!output) return undefined;
+  const embedded = EMBEDDED_CODE.exec(output);
+  if (embedded) return embedded[0];
+  return classify(output)?.code;
+}
+
 /**
  * One-line diagnosis of raw tool output, for an engine's `reason` field.
  *
@@ -289,10 +312,13 @@ export class HookriskError extends Error {
  * Colour only when a human is plausibly reading.
  *
  * Honours NO_COLOR (https://no-color.org) and FORCE_COLOR, and stays quiet when
- * stderr is redirected.
+ * the stream is redirected. The stream is a parameter because hookrisk writes
+ * to both: errors and the progress log go to stderr, the scan summary to
+ * stdout, and `hookrisk scan … > report.txt` must not put escape codes in the
+ * file just because the terminal on the other stream is interactive.
  */
-export function supportsColour(): boolean {
+export function supportsColour(stream: { isTTY?: boolean } = process.stderr): boolean {
   if (process.env.NO_COLOR) return false;
   if (process.env.FORCE_COLOR) return true;
-  return Boolean(process.stderr.isTTY);
+  return Boolean(stream.isTTY);
 }

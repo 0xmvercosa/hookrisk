@@ -11,6 +11,8 @@ export * from './errors.js';
 export * from './config.js';
 export * from './manifest.js';
 export * from './sarif.js';
+export { createLogger, type Logger, type LogFields, type LogLevel } from './log.js';
+export { resolveHome, homeCandidates, type HookriskHome } from './home.js';
 export { mergeEngineResults, makeFindingId } from './engines/dedupe.js';
 export { SlitherEngine } from './engines/slither.js';
 export { BlockSecEngine } from './engines/blocksec.js';

@@ -1,6 +1,7 @@
 {
   "name": "hookrisk",
   "version": "0.1.0",
+  "private": true,
   "description": "Executable risk assessment for Uniswap v4 hooks: multi-engine static analysis plus differential invariant fuzzing, scored against the Uniswap Foundation Hooks Security Framework.",
   "keywords": [
     "uniswap",
