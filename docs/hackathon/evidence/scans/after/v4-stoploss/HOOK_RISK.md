@@ -1,20 +1,40 @@
-# Hook Risk Report
+# Hook Risk Report — StopLoss
 
-**LOW risk** — 3/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
+Executable assessment against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework): static detectors, a differential twin-pool harness, and the framework’s scoring rubric. Unmeasured dimensions are excluded from the total, never counted as zero.
 
-> **Tier is undetermined.** 3/33 from what could be measured, up to 28/33 if every unmeasured dimension were at its maximum — between low and high. Unmeasured dimensions are excluded from the total, never counted as zero.
-
-❌ **Gate failed.**
-- engine hookrisk did not analyse the target: it was not recognised as a v4 hook (unsupported ABI), so nothing code-derived was assessed
-- the differential harness failed: harness setUp failed: TwinPools: getHookPermissions() reverted on the supplied runtime code (not a BaseHook-shaped hook, or the wrong bytecode): 0x. The twin pools could not be built, so no sequence r
-
-## What was assessed
+## Summary
 
 | | |
 | --- | --- |
-| Contract | `StopLoss` |
-| Source | `src/StopLoss.sol` |
-| Mode | source |
+| Contract | `StopLoss` in `src/StopLoss.sol` |
+| Compiler | solc 0.8.19 |
+| Risk tier | **LOW** 3/33, undetermined up to HIGH 28/33 |
+| Gate | ❌ Failed (2 reasons below) |
+| Findings | none · 1 classification |
+| Dimensions | 0 measured · 2 declared · 7 unmeasured |
+| Static analysis | ok |
+| Differential harness | failed (HR-E304) |
+| Invariants | ⚠️ I1 inconclusive · ⚠️ I2 inconclusive · ⚠️ I3 inconclusive |
+| Tool | hookrisk 0.1.0, rubric e7e8da52fd5717b6eb4517ea779b766f63148c41 |
+
+> **The tier is a range.** 3/33 is the sum of what could be measured or was declared; 7 dimensions have no detector or declaration. At their maximum the hook would score 28/33 (high). Declare them in `hookrisk.toml` to close the range.
+
+### Why the gate failed
+
+1. engine hookrisk did not analyse the target: it was not recognised as a v4 hook (unsupported ABI), so nothing code-derived was assessed
+2. the differential harness failed: harness setUp failed: TwinPools: getHookPermissions() reverted on the supplied runtime code (not a BaseHook-shaped hook, or the wrong bytecode): 0x. The twin pools could not be built, so no sequence r
+
+## Findings
+
+No defects. The classifications and the hook profile below describe the hook without accusing it.
+
+## Classifications
+
+Properties of the hook that change how it is scored or tested. They are informational and never fail the gate.
+
+| Rule | Classification | Applies to | Detail |
+| --- | --- | --- | --- |
+| C-02 `unsupported-hook-abi` | Hook ABI predates the shipped v4 interface; not analysed | `src/StopLoss.sol:17` | StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); callbacks with non-current signatures: afterDonate, afterSwap, beforeDonate, beforeSwap; inherits BaseHook without any current-ABI callback). |
 
 ## Score
 
@@ -32,7 +52,28 @@
 
 ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
+<details><summary>Evidence per dimension</summary>
+
+- **Complexity**
+  - Not measured: flag-implementation-divergence requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …); unprotected-hook-callback requires hookrisk or blocksec; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …).
+- **Custom math**
+  - Not measured: custom-accounting requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …); no detector for rounding-direction yet.
+- **External dependencies**
+  - Not measured: no detector for external-call-in-swap-path yet.
+- **TVL potential**
+  - Declared in hookrisk.toml. hookrisk does not measure tvlPotential.
+- **Team maturity**
+  - Declared in hookrisk.toml. hookrisk does not measure teamMaturity.
+- **Upgradeability**
+  - Not measured: no detector for upgradeable-hook (needs blocksec, which did not run); selfdestruct requires blocksec, which did not run.
+- **Price impacting behavior**
+  - Not measured: custom-accounting requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …); no detector for unbounded-dynamic-fee yet.
+
+</details>
+
 ## Security plan
+
+The strongest requirement across the tier baseline and every fired trigger, with the source of each.
 
 | Action | Strength | Because |
 | --- | --- | --- |
@@ -42,25 +83,15 @@
 | Audit by a math and invariants specialist | Optional | `tier:low` |
 | Continuous monitoring with anomaly detection | Optional | `tier:low` |
 
-## Findings
+## Dynamic analysis
 
-### ℹ️ StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …
-
-`unsupported-hook-abi` · **info** · confidence **high**
-
-`src/StopLoss.sol:17`
-
-StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); callbacks with non-current signatures: afterDonate, afterSwap, beforeDonate, beforeSwap; inherits BaseHook without any current-ABI callback). hookrisk's detectors did not analyse this contract, so every code-derived dimension is unmeasured — a zero-finding scan here is not a clean result. Port it to the current IHooks interface and rescan.
-
-Reported by: `hookrisk/hookrisk-unsupported-abi`
-
-## Invariants
+Differential twin-pool harness: **failed** (HR-E304). harness setUp failed: TwinPools: getHookPermissions() reverted on the supplied runtime code (not a BaseHook-shaped hook, or the wrong bytecode): 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).
 
 | | Invariant | Result | Detail |
 | --- | --- | --- | --- |
-| ⚠️ | I1 Conservation and solvency | inconclusive | harness setUp failed: TwinPools: getHookPermissions() reverted on the supplied runtime code (not a BaseHook-shaped hook, or the wrong bytecode): 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
-| ⚠️ | I2 No undeclared extraction | inconclusive | harness setUp failed: TwinPools: getHookPermissions() reverted on the supplied runtime code (not a BaseHook-shaped hook, or the wrong bytecode): 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
-| ⚠️ | I3 Exit liveness | inconclusive | harness setUp failed: TwinPools: getHookPermissions() reverted on the supplied runtime code (not a BaseHook-shaped hook, or the wrong bytecode): 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
+| ⚠️ | I1 Conservation and solvency | inconclusive | see the harness status above |
+| ⚠️ | I2 No undeclared extraction | inconclusive | see the harness status above |
+| ⚠️ | I3 Exit liveness | inconclusive | see the harness status above |
 
 ## Analysis coverage
 

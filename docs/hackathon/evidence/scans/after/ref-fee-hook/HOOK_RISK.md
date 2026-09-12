@@ -1,19 +1,31 @@
-# Hook Risk Report
+# Hook Risk Report — Counter
 
-**LOW risk** — 3/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
+Executable assessment against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework): static detectors, a differential twin-pool harness, and the framework’s scoring rubric. Unmeasured dimensions are excluded from the total, never counted as zero.
 
-> **Tier is undetermined.** 3/33 from what could be measured, up to 28/33 if every unmeasured dimension were at its maximum — between low and high. Unmeasured dimensions are excluded from the total, never counted as zero.
-
-❌ **Gate failed.**
-- engine hookrisk failed: HR-E203 Target compiles under forge but not under Slither: Error (7920): Identifier not found or not unique. --> src/RefHook.sol:144:59:
-
-## What was assessed
+## Summary
 
 | | |
 | --- | --- |
-| Contract | `Counter` |
-| Source | `src/RefHook.sol` |
-| Mode | source |
+| Contract | `Counter` in `src/RefHook.sol` |
+| Compiler | solc 0.8.26 |
+| Risk tier | **LOW** 3/33, undetermined up to HIGH 28/33 |
+| Gate | ❌ Failed (1 reason below) |
+| Findings | none |
+| Dimensions | 0 measured · 2 declared · 7 unmeasured |
+| Static analysis | failed (HR-E203) |
+| Differential harness | skipped |
+| Invariants | ⏭️ I1 skipped · ⏭️ I2 skipped · ⏭️ I3 skipped |
+| Tool | hookrisk 0.1.0, rubric e7e8da52fd5717b6eb4517ea779b766f63148c41 |
+
+> **The tier is a range.** 3/33 is the sum of what could be measured or was declared; 7 dimensions have no detector or declaration. At their maximum the hook would score 28/33 (high). Declare them in `hookrisk.toml` to close the range.
+
+### Why the gate failed
+
+1. engine hookrisk failed: HR-E203 Target compiles under forge but not under Slither: Error (7920): Identifier not found or not unique. --> src/RefHook.sol:144:59:
+
+## Findings
+
+No defects.
 
 ## Score
 
@@ -31,7 +43,28 @@
 
 ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
+<details><summary>Evidence per dimension</summary>
+
+- **Complexity**
+  - Not measured: flag-implementation-divergence requires hookrisk, which did not run; unprotected-hook-callback requires hookrisk or blocksec, which did not run.
+- **Custom math**
+  - Not measured: custom-accounting requires hookrisk, which did not run; no detector for rounding-direction yet.
+- **External dependencies**
+  - Not measured: no detector for external-call-in-swap-path yet.
+- **TVL potential**
+  - Declared in hookrisk.toml. hookrisk does not measure tvlPotential.
+- **Team maturity**
+  - Declared in hookrisk.toml. hookrisk does not measure teamMaturity.
+- **Upgradeability**
+  - Not measured: no detector for upgradeable-hook (needs blocksec, which did not run); selfdestruct requires blocksec, which did not run.
+- **Price impacting behavior**
+  - Not measured: custom-accounting requires hookrisk, which did not run; no detector for unbounded-dynamic-fee yet.
+
+</details>
+
 ## Security plan
+
+The strongest requirement across the tier baseline and every fired trigger, with the source of each.
 
 | Action | Strength | Because |
 | --- | --- | --- |
@@ -41,17 +74,15 @@
 | Audit by a math and invariants specialist | Optional | `tier:low` |
 | Continuous monitoring with anomaly detection | Optional | `tier:low` |
 
-## Findings
+## Dynamic analysis
 
-None.
-
-## Invariants
+Differential twin-pool harness: **skipped**. artifact directory /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo/out does not exist (forge config: out = "out") — run `forge build` in /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo first.
 
 | | Invariant | Result | Detail |
 | --- | --- | --- | --- |
-| ⚠️ | I1 Conservation and solvency | skipped | artifact directory /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo/out does not exist (forge config: out = "out") — run `forge build` in /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo first. |
-| ⚠️ | I2 No undeclared extraction | skipped | artifact directory /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo/out does not exist (forge config: out = "out") — run `forge build` in /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo first. |
-| ⚠️ | I3 Exit liveness | skipped | artifact directory /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo/out does not exist (forge config: out = "out") — run `forge build` in /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo first. |
+| ⏭️ | I1 Conservation and solvency | skipped | see the harness status above |
+| ⏭️ | I2 No undeclared extraction | skipped | see the harness status above |
+| ⏭️ | I3 Exit liveness | skipped | see the harness status above |
 
 ## Analysis coverage
 

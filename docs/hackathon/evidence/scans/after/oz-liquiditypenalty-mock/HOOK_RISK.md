@@ -1,20 +1,39 @@
-# Hook Risk Report
+# Hook Risk Report — LiquidityPenaltyHookMock
 
-**MEDIUM risk** — 12/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
+Executable assessment against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework): static detectors, a differential twin-pool harness, and the framework’s scoring rubric. Unmeasured dimensions are excluded from the total, never counted as zero.
 
-> **Tier is undetermined.** 12/33 from what could be measured, up to 24/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
-
-✅ **Gate passed.**
-
-## What was assessed
+## Summary
 
 | | |
 | --- | --- |
-| Contract | `LiquidityPenaltyHookMock` |
-| Source | `src/mocks/general/LiquidityPenaltyHookMock.sol` |
-| Mode | source |
+| Contract | `LiquidityPenaltyHookMock` in `src/mocks/general/LiquidityPenaltyHookMock.sol` |
+| Compiler | solc 0.8.26 |
+| Risk tier | **MEDIUM** 12/33, undetermined up to HIGH 24/33 |
+| Gate | ✅ Passed |
+| Findings | none · 1 classification |
+| Dimensions | 3 measured · 2 declared · 4 unmeasured |
+| Static analysis | ok |
+| Differential harness | ok |
+| Invariants | ✅ I1 passed · ✅ I2 passed · ✅ I3 passed |
+| Tool | hookrisk 0.1.0, rubric e7e8da52fd5717b6eb4517ea779b766f63148c41 |
 
-### Hook profile
+> **The tier is a range.** 12/33 is the sum of what could be measured or was declared; 4 dimensions have no detector or declaration. At their maximum the hook would score 24/33 (high). Declare them in `hookrisk.toml` to close the range.
+
+## Findings
+
+No defects. The classifications and the hook profile below describe the hook without accusing it.
+
+## Classifications
+
+Properties of the hook that change how it is scored or tested. They are informational and never fail the gate.
+
+| Rule | Classification | Applies to | Detail |
+| --- | --- | --- | --- |
+| HS-07 `custom-accounting` | Custom accounting: the hook can alter settled amounts | `src/mocks/general/LiquidityPenaltyHookMock.sol:10` | LiquidityPenaltyHookMock (src/mocks/general/LiquidityPenaltyHookMock.sol#10-18) declares custom-accounting permissions: `afterAddLiquidityReturnDelta` (bit 1), `afterRemoveLiquidityReturnDelta` (bit 0). |
+
+## Hook profile
+
+The static engine’s structural measurement of the contract. Complexity is derived from these metrics; the rule that fired is quoted in the score table’s evidence.
 
 | Metric | Value |
 | --- | --- |
@@ -26,8 +45,6 @@
 | Returns a delta | true |
 | Owner-only surface | false |
 | Permissions declared | `afterAddLiquidity`, `afterRemoveLiquidity`, `afterAddLiquidityReturnDelta`, `afterRemoveLiquidityReturnDelta` |
-
-Complexity is derived from these metrics; the rule that fired is in the score table’s evidence.
 
 ## Score
 
@@ -45,14 +62,41 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 
 ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
+<details><summary>Evidence per dimension</summary>
+
+- **Complexity**
+  - hook-profile metrics: callbacksImplemented=2, callbacksDeclared=2, stateWritesInCallbacks=3, externalCallsInSwapPath=0, internalFunctionsReachableFromCallbacks=13, usesReturnsDelta=true, hasOwnerOnlyFunctions=false
+  - Scored 3 by rule `usesReturnsDelta || externalCallsInSwapPath >= 1`: Either a returns-delta permission or an external call in the swap path is a 'multi-step flow' in the prose's sense: the callback's effect is not local to itself. (hookrisk’s interpretation; the framework publishes no brackets)
+  - The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target.
+- **Custom math**
+  - 1 custom-accounting finding(s)
+  - Custom accounting implies a custom curve or non-standard settlement arithmetic.
+- **External dependencies**
+  - Not measured: no detector for external-call-in-swap-path yet.
+- **TVL potential**
+  - Declared in hookrisk.toml. hookrisk does not measure tvlPotential.
+- **Team maturity**
+  - Declared in hookrisk.toml. hookrisk does not measure teamMaturity.
+- **Upgradeability**
+  - Not measured: no detector for upgradeable-hook (needs blocksec, which did not run); selfdestruct requires blocksec, which did not run.
+- **Price impacting behavior**
+  - 1 custom-accounting finding(s)
+  - A returns-delta permission lets the hook alter settled amounts, which is the framework’s definition of price-impacting behaviour.
+
+</details>
+
 ### Feature triggers
 
-These apply regardless of the total score — the framework's own safeguard against a team scoring itself low while shipping a dangerous primitive.
+These apply regardless of the total: the framework’s own safeguard against a team scoring itself low while shipping a dangerous primitive.
 
-- **Custom Curve or Non Standard Math** — fired by customMath >= 3 (is 3), returns-delta-permission _(derivation is hookrisk's reading)_
-- **Price Impacting Behavior** — fired by priceImpactingBehavior >= 1 (is 3), returns-delta-permission _(derivation is hookrisk's reading)_
+| Trigger | Fired by | Derivation |
+| --- | --- | --- |
+| Custom Curve or Non Standard Math | `customMath >= 3 (is 3)`, `returns-delta-permission` | hookrisk’s reading |
+| Price Impacting Behavior | `priceImpactingBehavior >= 1 (is 3)`, `returns-delta-permission` | hookrisk’s reading |
 
 ## Security plan
+
+The strongest requirement across the tier baseline and every fired trigger, with the source of each.
 
 | Action | Strength | Because |
 | --- | --- | --- |
@@ -68,25 +112,34 @@ These apply regardless of the total score — the framework's own safeguard agai
 | Continuous monitoring with anomaly detection | Recommended | `tier:medium`, `trigger:custom-math` |
 | Second independent audit | Optional | `tier:medium` |
 
-## Findings
+## Dynamic analysis
 
-### ℹ️ LiquidityPenaltyHookMock (src/mocks/general/LiquidityPenaltyHookMock.sol#10-18) declares custom-accounting permissions: `afterAddLiquidityReturnDelta` (bit …
+Differential twin-pool harness: **ok**.
 
-`custom-accounting` · **info** · confidence **high**
-
-`src/mocks/general/LiquidityPenaltyHookMock.sol:10`
-
-LiquidityPenaltyHookMock (src/mocks/general/LiquidityPenaltyHookMock.sol#10-18) declares custom-accounting permissions: `afterAddLiquidityReturnDelta` (bit 1), `afterRemoveLiquidityReturnDelta` (bit 0). The hook can alter settled amounts, which raises its risk tier under the framework's custom-math and price-impact triggers and is liquidity-side only: swaps still route through v4's pricing, so the harness keeps comparing swap output against the reference pool (invariant I2).
-
-Reported by: `hookrisk/hookrisk-custom-accounting`
-
-## Invariants
+| Run | |
+| --- | --- |
+| Hook address flags | `0x503` (derived from the runtime code) |
+| Pricing | v4 pricing: output compared against the reference pool |
+| Pool fee | static |
+| Initial liquidity | seeded on both pools |
 
 | | Invariant | Result | Detail |
 | --- | --- | --- | --- |
 | ✅ | I1 Conservation and solvency | passed |  |
 | ✅ | I2 No undeclared extraction | passed |  |
 | ✅ | I3 Exit liveness | passed |  |
+
+| Observed | |
+| --- | --- |
+| Fuzz sequences | 1285 |
+| Swaps landed / compared / skipped | 13510 / 13510 / 0 |
+| Swaps that reverted only with the hook | 0 |
+| Positions opened / closed | 6710 / 6710 |
+| Donations | 6955 |
+| Price checks / monotonicity violations | 13510 / 0 |
+| Exit failures | 0 |
+
+The harness executed 13510 swap(s) (13510 compared against the reference pool, 0 skipped), opened 6710 and closed 6710 position(s), made 6955 donation(s) and ran 13510 price check(s) over 1285 sequence(s). An invariant with no relevant observations is reported inconclusive, not passed.
 
 ## Analysis coverage
 
@@ -95,9 +148,9 @@ Reported by: `hookrisk/hookrisk-custom-accounting`
 | hookrisk Slither detectors | ok | 2 |  |
 | Differential harness (Foundry) | ok | 0 |  |
 
-The harness executed 13510 swap(s) (13510 compared against the reference pool, 0 skipped), opened 6710 and closed 6710 position(s), made 6955 donation(s) and ran 13510 price check(s) over 1285 sequence(s). An invariant with no relevant observations is reported inconclusive, not passed.
+Permissions resolved by static analysis and derived from the deployed runtime code agree.
 
-> ⚠️ **3 function(s) were not analysed.** Slither could not lift them to IR and continued silently. Findings below do not cover them — this is not the same as those functions being clean. See `HR-E205`.
+> ⚠️ **3 function(s) in the compilation unit were not analysed.** Slither could not lift them to IR and continued silently. Findings above do not cover them; that is not the same as those functions being clean. See `HR-E205`.
 
 - `ReHypothecationHook._resolveHookDelta`
 - `ReHypothecationERC4626Mock._resolveHookDelta`

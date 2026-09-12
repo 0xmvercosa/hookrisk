@@ -20,7 +20,7 @@ import { Ajv2020 as Ajv, type ValidateFunction } from 'ajv/dist/2020.js';
 
 import { HookriskError } from './errors.js';
 import type { ScoreResult } from './scoring/score.js';
-import type { EngineResult, Finding, Severity } from './types.js';
+import type { EngineResult, Finding, RuleClass, Severity } from './types.js';
 import { SEVERITIES, isClassification, severityRank } from './types.js';
 import type { UncoveredFunction } from './engines/slither.js';
 import type { GatePolicy } from './config.js';
@@ -457,63 +457,164 @@ const PROFILE_METRIC_LABEL: Record<string, string> = {
   hasOwnerOnlyFunctions: 'Owner-only surface',
 };
 
-/** Render HOOK_RISK.md, the human-facing summary. */
+/** Short rule identifiers for the report; classes without one render by name. */
+const RULE_ID: Record<string, string> = {
+  'unprotected-hook-callback': 'HS-01',
+  'flag-implementation-divergence': 'HS-02',
+  'admin-surface': 'HS-03',
+  'upgradeable-hook': 'HS-04',
+  'external-call-in-swap-path': 'HS-05',
+  'unbounded-dynamic-fee': 'HS-06',
+  'custom-accounting': 'HS-07',
+  'rounding-direction': 'HS-08',
+  'unprotected-unlock-callback': 'BS-01',
+  selfdestruct: 'BS-02',
+  'callback-intentionally-disabled': 'C-01',
+  'unsupported-hook-abi': 'C-02',
+  'hook-profile': 'C-00',
+};
+
+const SEVERITY_LABEL: Record<Severity, string> = {
+  critical: '🔴 Critical',
+  high: '🟠 High',
+  medium: '🟡 Medium',
+  low: '🔵 Low',
+  info: 'ℹ️ Info',
+};
+
+const INVARIANT_ICON: Record<string, string> = {
+  passed: '✅',
+  failed: '❌',
+  inconclusive: '⚠️',
+  'not-applicable': '➖',
+  skipped: '⏭️',
+};
+
+/**
+ * A heading-length title for a finding.
+ *
+ * Detector descriptions open with the fully qualified function signature, which
+ * is the right anchor for a SARIF result and the wrong one for a heading. Where
+ * the rule and its discriminator say what the finding is about, build the
+ * title from those; otherwise fall back to the engine's own first sentence.
+ */
+function shortTitle(f: Record<string, unknown>): string {
+  const rule = String(f.ruleClass);
+  const what = f.discriminator ? `\`${String(f.discriminator)}\`` : undefined;
+  switch (rule) {
+    case 'unprotected-hook-callback':
+      return what ? `${what} is callable by anyone, not only the PoolManager` : 'A hook callback is callable by anyone';
+    case 'flag-implementation-divergence':
+      return what ? `${what} is declared but has no working implementation` : 'Declared permissions and implemented callbacks disagree';
+    case 'callback-intentionally-disabled':
+      return what ? `${what} is disabled by design (deliberate revert)` : 'A callback is disabled by design';
+    case 'custom-accounting':
+      return 'Custom accounting: the hook can alter settled amounts';
+    case 'unsupported-hook-abi':
+      return 'Hook ABI predates the shipped v4 interface; not analysed';
+    case 'upgradeable-hook':
+      return 'The hook delegates to mutable code';
+    case 'selfdestruct':
+      return 'The hook can self-destruct';
+    case 'unprotected-unlock-callback':
+      return what ? `${what} is callable by anyone` : 'unlockCallback is callable by anyone';
+    default:
+      return String(f.title);
+  }
+}
+
+const cell = (text: unknown): string => String(text ?? '').replace(/\|/g, '\\|').replace(/\n+/g, ' ');
+
+/** Render HOOK_RISK.md, the human-facing report. */
 export function renderMarkdown(manifest: Manifest): string {
   const score = manifest.score as ReturnType<typeof serialiseScore>;
   const findings = (manifest.findings ?? []) as Array<Record<string, unknown>>;
   const engines = (manifest.engines ?? []) as Array<Record<string, unknown>>;
   const coverage = (manifest.coverage ?? {}) as Record<string, unknown>;
   const target = (manifest.target ?? {}) as Record<string, unknown>;
+  const permissions = (manifest.permissions ?? {}) as Record<string, unknown>;
   const invariants = (manifest.invariants ?? []) as InvariantResult[];
   const gate = manifest.gate as Record<string, unknown> | undefined;
+  const generated = (manifest.generatedBy ?? {}) as Record<string, unknown>;
+
+  const defects = findings.filter((f) => !isClassification(f.ruleClass as RuleClass));
+  const classifications = findings.filter(
+    (f) => isClassification(f.ruleClass as RuleClass) && f.ruleClass !== 'hook-profile',
+  );
+  const profile = findings.find((f) => f.ruleClass === 'hook-profile');
+  const dimensions = score.dimensions as Array<Record<string, unknown>>;
+  const bySource = { measured: 0, declared: 0, unmeasured: 0 } as Record<string, number>;
+  for (const d of dimensions) bySource[String(d.source)] = (bySource[String(d.source)] ?? 0) + 1;
+
+  const severityCounts = new Map<Severity, number>();
+  for (const f of defects) {
+    const sev = f.severity as Severity;
+    severityCounts.set(sev, (severityCounts.get(sev) ?? 0) + 1);
+  }
+  const severitySummary =
+    defects.length === 0
+      ? 'none'
+      : [...SEVERITIES]
+          .reverse()
+          .filter((sev) => severityCounts.has(sev))
+          .map((sev) => `${severityCounts.get(sev)} ${sev}`)
+          .join(', ');
+
+  const tierLabel = String(score.tier).toUpperCase();
+  const tierText = score.inconclusive
+    ? `**${tierLabel}** ${score.total}/33, undetermined up to ${String(score.tierUpperBound).toUpperCase()} ${score.totalUpperBound}/33`
+    : `**${tierLabel}** ${score.total}/33`;
+  const gateText = !gate
+    ? 'not evaluated (`--no-gate`)'
+    : gate.passed
+      ? '✅ Passed'
+      : `❌ Failed (${(gate.failures as string[]).length} reason${(gate.failures as string[]).length === 1 ? '' : 's'} below)`;
+  const staticRow = engines.find((e) => e.engine === 'hookrisk');
+  const blocksecRow = engines.find((e) => e.engine === 'blocksec');
+  const harnessRow = engines.find((e) => e.engine === 'harness');
+  const engineText = (e: Record<string, unknown> | undefined): string =>
+    !e ? 'not run' : `${e.status}${e.errorCode ? ` (${e.errorCode})` : ''}`;
+  const invariantText =
+    invariants.length === 0
+      ? 'not run'
+      : invariants.map((i) => `${INVARIANT_ICON[i.status] ?? ''} ${i.id} ${i.status}`).join(' · ');
 
   const out: string[] = [];
-  const tier = String(score.tier).toUpperCase();
-
-  out.push('# Hook Risk Report', '');
+  out.push(`# Hook Risk Report — ${target.contractName ?? 'hook'}`, '');
   out.push(
-    `**${tier} risk** — ${score.total}/33 against the ` +
-      `[Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).`,
+    'Executable assessment against the [Uniswap Hooks Security Framework]' +
+      '(https://github.com/uniswapfoundation/security-framework): static detectors, a differential ' +
+      'twin-pool harness, and the framework’s scoring rubric. Unmeasured dimensions are excluded from ' +
+      'the total, never counted as zero.',
     '',
   );
 
+  // --- summary ---
+  out.push('## Summary', '');
+  out.push('| | |', '| --- | --- |');
+  out.push(`| Contract | \`${target.contractName ?? '?'}\`${target.sourceFile ? ` in \`${target.sourceFile}\`` : ''} |`);
+  if (target.address) out.push(`| Address | \`${target.address}\`${target.chainId ? ` on chain ${target.chainId}` : ''} |`);
+  if (target.codehash) out.push(`| Codehash | \`${target.codehash}\` |`);
+  if (target.solcVersion) out.push(`| Compiler | solc ${target.solcVersion} |`);
+  out.push(`| Risk tier | ${tierText} |`);
+  out.push(`| Gate | ${gateText} |`);
+  out.push(`| Findings | ${severitySummary}${classifications.length ? ` · ${classifications.length} classification${classifications.length === 1 ? '' : 's'}` : ''} |`);
+  out.push(`| Dimensions | ${bySource.measured} measured · ${bySource.declared} declared · ${bySource.unmeasured} unmeasured |`);
+  out.push(`| Static analysis | ${engineText(staticRow)}${blocksecRow ? ` · BlockSec ${engineText(blocksecRow)}` : ''} |`);
+  out.push(`| Differential harness | ${engineText(harnessRow)} |`);
+  out.push(`| Invariants | ${invariantText} |`);
+  if (generated.version) out.push(`| Tool | hookrisk ${generated.version}${score.rubric ? `, rubric ${(score.rubric as Record<string, unknown>).revision ?? ''}` : ''} |`);
+  out.push('');
+
   if (score.inconclusive) {
     out.push(
-      `> **Tier is undetermined.** ${score.total}/33 from what could be measured, up to ` +
-        `${score.totalUpperBound}/33 if every unmeasured dimension were at its maximum — ` +
-        `between ${score.tier} and ${score.tierUpperBound}. Unmeasured dimensions are excluded ` +
-        'from the total, never counted as zero.',
+      `> **The tier is a range.** ${score.total}/33 is the sum of what could be measured or was declared; ` +
+        `${bySource.unmeasured} dimension${bySource.unmeasured === 1 ? '' : 's'} ha${bySource.unmeasured === 1 ? 's' : 've'} no detector or declaration. ` +
+        `At their maximum the hook would score ${score.totalUpperBound}/33 (${score.tierUpperBound}). ` +
+        'Declare them in `hookrisk.toml` to close the range.',
       '',
     );
   }
-
-  if (gate) {
-    out.push(
-      gate.passed
-        ? '✅ **Gate passed.**'
-        : `❌ **Gate failed.**\n${(gate.failures as string[]).map((f) => `- ${f}`).join('\n')}`,
-      '',
-    );
-    // What the gate chose not to fail on. A pass with an undetermined tier is
-    // a policy decision the reader should see next to the verdict, not infer
-    // from the score table further down.
-    for (const note of (gate.notes as string[] | undefined) ?? []) {
-      out.push(`> ℹ️ ${note}`, '');
-    }
-  }
-
-  // --- target ---
-  out.push('## What was assessed', '');
-  out.push('| | |', '| --- | --- |');
-  if (target.contractName) out.push(`| Contract | \`${target.contractName}\` |`);
-  if (target.sourceFile) out.push(`| Source | \`${target.sourceFile}\` |`);
-  if (target.address) out.push(`| Address | \`${target.address}\` |`);
-  if (target.chainId) out.push(`| Chain | ${target.chainId} |`);
-  if (target.codehash) {
-    out.push(`| Codehash | \`${target.codehash}\` |`);
-  }
-  out.push(`| Mode | ${target.mode} |`, '');
-
   if (target.codehash) {
     out.push(
       '> This report is bound to the codehash above. If the code at that address changes, ' +
@@ -522,39 +623,101 @@ export function renderMarkdown(manifest: Manifest): string {
     );
   }
 
+  if (gate) {
+    const failures = (gate.failures as string[]) ?? [];
+    if (failures.length > 0) {
+      out.push('### Why the gate failed', '');
+      failures.forEach((f, i) => out.push(`${i + 1}. ${f}`));
+      out.push('');
+    }
+    for (const note of (gate.notes as string[] | undefined) ?? []) out.push(`> ℹ️ ${note}`, '');
+  }
+
+  // --- findings ---
+  out.push('## Findings', '');
+  if (defects.length === 0) {
+    out.push(
+      classifications.length > 0 || profile
+        ? 'No defects. The classifications and the hook profile below describe the hook without accusing it.'
+        : 'No defects.',
+      '',
+    );
+  } else {
+    out.push(
+      '| # | Severity | Rule | Finding | Location | Confidence | Engines |',
+      '| --- | --- | --- | --- | --- | --- | --- |',
+    );
+    defects.forEach((f, i) => {
+      const location = f.location as Record<string, unknown> | null;
+      const eng = (f.engines as Array<Record<string, unknown>>).map((e) => String(e.engine));
+      out.push(
+        `| F${i + 1} | ${SEVERITY_LABEL[f.severity as Severity]} | ${RULE_ID[String(f.ruleClass)] ?? ''} \`${f.ruleClass}\` | ${cell(shortTitle(f))} | ${location ? `\`${location.file}:${location.line}\`` : '—'} | ${f.confidence}${eng.length > 1 ? ' (corroborated)' : ''} | ${eng.join(', ')} |`,
+      );
+    });
+    out.push('');
+    defects.forEach((f, i) => {
+      const location = f.location as Record<string, unknown> | null;
+      const attributions = (f.engines as Array<Record<string, unknown>>).map((e) => `\`${e.engine}/${e.nativeRule}\``);
+      out.push(`### F${i + 1} · ${SEVERITY_LABEL[f.severity as Severity]} · ${shortTitle(f)}`, '');
+      out.push(
+        `${RULE_ID[String(f.ruleClass)] ? `${RULE_ID[String(f.ruleClass)]} ` : ''}\`${f.ruleClass}\`` +
+          (location ? ` · \`${location.file}:${location.line}\`` : '') +
+          ` · confidence **${f.confidence}**` +
+          (attributions.length > 1 ? ' · **corroborated across engines**' : ''),
+        '',
+      );
+      out.push(String(f.description), '');
+      out.push(`Reported by ${attributions.join(', ')}.`, '');
+    });
+  }
+
+  // --- classifications ---
+  if (classifications.length > 0) {
+    out.push('## Classifications', '');
+    out.push(
+      'Properties of the hook that change how it is scored or tested. They are informational and never fail the gate.',
+      '',
+    );
+    out.push('| Rule | Classification | Applies to | Detail |', '| --- | --- | --- | --- |');
+    for (const c of classifications) {
+      const location = c.location as Record<string, unknown> | null;
+      const eng = (c.engines as Array<Record<string, unknown>>).map((e) => String(e.engine));
+      out.push(
+        `| ${RULE_ID[String(c.ruleClass)] ?? ''} \`${c.ruleClass}\` | ${cell(shortTitle(c))} | ${location ? `\`${location.file}:${location.line}\`` : '—'}${c.discriminator ? ` (\`${c.discriminator}\`)` : ''} | ${cell(String(c.description).split('. ')[0])}.${eng.length > 1 ? ` Confirmed by ${eng.join(' and ')}.` : ''} |`,
+      );
+    }
+    out.push('');
+  }
+
   // --- hook profile ---
-  // The engine's structural measurements of the contract, rendered where a
-  // reader asks "what did the tool look at" rather than among the findings:
-  // the profile is a description, and listing it under Findings would read as
-  // a defect with nothing to fix.
-  const profile = findings.find((f) => f.ruleClass === 'hook-profile');
   if (profile) {
-    out.push('### Hook profile', '');
+    out.push('## Hook profile', '');
+    out.push(
+      'The static engine’s structural measurement of the contract. Complexity is derived from these ' +
+        'metrics; the rule that fired is quoted in the score table’s evidence.',
+      '',
+    );
     out.push('| Metric | Value |', '| --- | --- |');
     const callbacks = (profile.callbacks as string[] | undefined) ?? [];
     if (callbacks.length > 0) out.push(`| Callbacks implemented | ${callbacks.map((c) => `\`${c}\``).join(', ')} |`);
     for (const [name, value] of Object.entries((profile.metrics as Record<string, unknown>) ?? {})) {
       out.push(`| ${PROFILE_METRIC_LABEL[name] ?? name} | ${String(value)} |`);
     }
-    const permissions = profile.permissions as Record<string, boolean> | undefined;
-    if (permissions) {
-      const declared = Object.entries(permissions)
-        .filter(([, on]) => on)
-        .map(([name]) => `\`${name}\``);
-      out.push(`| Permissions declared | ${declared.length > 0 ? declared.join(', ') : 'none'} |`);
+    const declared = profile.permissions as Record<string, boolean> | undefined;
+    if (declared) {
+      const on = Object.entries(declared).filter(([, v]) => v).map(([name]) => `\`${name}\``);
+      out.push(`| Permissions declared | ${on.length > 0 ? on.join(', ') : 'none'} |`);
     }
-    out.push('', 'Complexity is derived from these metrics; the rule that fired is in the score table’s evidence.', '');
+    out.push('');
   }
 
   // --- score ---
   out.push('## Score', '');
   out.push('| Dimension | Score | Source | Bracket |', '| --- | --- | --- | --- |');
-  for (const d of score.dimensions as Array<Record<string, unknown>>) {
+  for (const d of dimensions) {
     const value = d.value === null ? '—' : `${d.value}/${d.max}`;
     const interp = d.bracketsAreInterpretation ? ' ᵃ' : '';
-    out.push(
-      `| ${d.name} | ${value} | ${d.source} | ${d.bracketLabel ?? '_unmeasured_'}${interp} |`,
-    );
+    out.push(`| ${d.name} | ${value} | ${d.source} | ${d.bracketLabel ?? '_unmeasured_'}${interp} |`);
   }
   out.push('');
   out.push(
@@ -563,146 +726,147 @@ export function renderMarkdown(manifest: Manifest): string {
       '[FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.',
     '',
   );
+  const evidenced = dimensions.filter((d) => Array.isArray(d.evidence) && (d.evidence as string[]).length > 0);
+  if (evidenced.length > 0) {
+    out.push('<details><summary>Evidence per dimension</summary>', '');
+    for (const d of evidenced) {
+      out.push(`- **${d.name}**`);
+      for (const e of d.evidence as string[]) out.push(`  - ${e}`);
+    }
+    out.push('', '</details>', '');
+  }
 
   const triggers = score.triggers as Array<Record<string, unknown>>;
   if (triggers.length > 0) {
     out.push('### Feature triggers', '');
     out.push(
-      'These apply regardless of the total score — the framework\'s own safeguard against a ' +
-        'team scoring itself low while shipping a dangerous primitive.',
+      'These apply regardless of the total: the framework’s own safeguard against a team scoring itself ' +
+        'low while shipping a dangerous primitive.',
       '',
     );
+    out.push('| Trigger | Fired by | Derivation |', '| --- | --- | --- |');
     for (const t of triggers) {
-      const note = t.derivationIsInterpretation ? ' _(derivation is hookrisk\'s reading)_' : '';
-      out.push(`- **${t.name}** — fired by ${(t.firedBy as string[]).join(', ')}${note}`);
+      out.push(
+        `| ${t.name} | ${(t.firedBy as string[]).map((x) => `\`${x}\``).join(', ')} | ${t.derivationIsInterpretation ? 'hookrisk’s reading' : 'framework'} |`,
+      );
     }
     out.push('');
   }
 
-  // --- recommendations ---
+  // --- security plan ---
   const recommendations = score.recommendations as Array<Record<string, unknown>>;
   if (recommendations.length > 0) {
     out.push('## Security plan', '');
+    out.push(
+      'The strongest requirement across the tier baseline and every fired trigger, with the source of each.',
+      '',
+    );
     out.push('| Action | Strength | Because |', '| --- | --- | --- |');
     for (const r of recommendations) {
       const sources = (r.sources as Array<Record<string, unknown>>) ?? [];
-      const why = sources.map((s) => `\`${s.from}\``).join(', ');
-      out.push(`| ${r.label} | ${STRENGTH_LABEL[String(r.strength)] ?? r.strength} | ${why} |`);
+      out.push(`| ${r.label} | ${STRENGTH_LABEL[String(r.strength)] ?? r.strength} | ${sources.map((s) => `\`${s.from}\``).join(', ')} |`);
     }
     out.push('');
   }
 
-  // --- findings ---
-  out.push('## Findings', '');
-  const listed = findings.filter((f) => f.ruleClass !== 'hook-profile');
-  if (listed.length === 0) {
-    out.push(
-      findings.some((f) => f.ruleClass === 'hook-profile')
-        ? 'None beyond the hook profile under "What was assessed". The engine table below counts that profile as one informational finding.'
-        : 'None.',
-      '',
-    );
-  } else {
-    for (const f of listed) {
-      const severity = f.severity as Severity;
-      const corroborated = (f.engines as unknown[]).length > 1;
+  // --- dynamic analysis ---
+  const run = permissions.harnessRun as Record<string, unknown> | undefined;
+  const observations = coverage.observations as HarnessObservations | undefined;
+  if (invariants.length > 0 || harnessRow) {
+    out.push('## Dynamic analysis', '');
+    if (harnessRow) {
       out.push(
-        `### ${SEVERITY_ICON[severity]} ${f.title}`,
-        '',
-        `\`${f.ruleClass}\`` +
-          (f.discriminator ? ` (\`${f.discriminator}\`)` : '') +
-          ` · **${severity}** · confidence **${f.confidence}**` +
-          (corroborated ? ' · **corroborated by multiple engines**' : ''),
+        `Differential twin-pool harness: **${harnessRow.status}**${harnessRow.errorCode ? ` (${harnessRow.errorCode})` : ''}` +
+          (harnessRow.reason ? `. ${harnessRow.reason}` : '.'),
         '',
       );
-      const location = f.location as Record<string, unknown> | null;
-      if (location) out.push(`\`${location.file}:${location.line}\``, '');
-      out.push(String(f.description), '');
+    }
+    if (run) {
+      out.push('| Run | |', '| --- | --- |');
+      out.push(`| Hook address flags | \`0x${Number(run.flags).toString(16)}\`${run.permissionsDerived ? ' (derived from the runtime code)' : ''} |`);
+      out.push(`| Pricing | ${run.customCurve ? 'custom curve: output comparison replaced by price monotonicity' : 'v4 pricing: output compared against the reference pool'} |`);
+      out.push(`| Pool fee | ${run.dynamicFee ? 'dynamic (static fee rejected by the hook)' : 'static'} |`);
+      out.push(`| Initial liquidity | ${run.seeded === 'both' ? 'seeded on both pools' : `the hook rejected PoolManager liquidity${run.hookedSeedRevert ? ` (\`${String(run.hookedSeedRevert).slice(0, 10)}…\`)` : ''}`} |`);
+      out.push('');
+    }
+    if (invariants.length > 0) {
+      out.push('| | Invariant | Result | Detail |', '| --- | --- | --- | --- |');
+      for (const inv of invariants) {
+        // A skipped harness gives every invariant the same reason; printing it
+        // three more times buries the table. Point at the line above instead.
+        const detail =
+          inv.detail && harnessRow?.reason && inv.detail === harnessRow.reason
+            ? 'see the harness status above'
+            : cell(inv.detail ?? '');
+        out.push(`| ${INVARIANT_ICON[inv.status] ?? ''} | ${inv.id} ${inv.name} | ${inv.status} | ${detail} |`);
+      }
+      out.push('');
+      for (const inv of invariants) {
+        if (inv.status !== 'failed' || !inv.counterexample) continue;
+        out.push(`### Counterexample for ${inv.id}`, '');
+        if (inv.counterexample.revertSelector) out.push(`Hook reverted with \`${inv.counterexample.revertSelector}\`.`, '');
+        if (inv.counterexample.sequence?.length) {
+          out.push('```');
+          inv.counterexample.sequence.forEach((step) => out.push(`${step.signature ?? step.target ?? ''} ${step.calldata ?? ''}`.trim()));
+          out.push('```', '');
+        }
+      }
+    }
+    if (observations) {
+      const n = (key: keyof HarnessObservations): number => observations[key] ?? 0;
+      out.push('| Observed | |', '| --- | --- |');
+      if (observations.sequences !== undefined) out.push(`| Fuzz sequences | ${observations.sequences} |`);
+      out.push(`| Swaps landed / compared / skipped | ${n('swapsExecuted')} / ${n('swapsCompared')} / ${n('swapsSkipped')} |`);
+      out.push(`| Swaps that reverted only with the hook | ${n('hookedSwapReverted')} |`);
+      out.push(`| Positions opened / closed | ${n('positionsOpened')} / ${n('positionsClosed')} |`);
+      out.push(`| Donations | ${n('donations')} |`);
+      out.push(`| Price checks / monotonicity violations | ${n('priceChecks')} / ${n('monotonicityViolations')} |`);
+      out.push(`| Exit failures | ${n('exitFailures')} |`);
+      out.push('');
       out.push(
-        'Reported by: ' +
-          (f.engines as Array<Record<string, unknown>>)
-            .map((e) => `\`${e.engine}/${e.nativeRule}\``)
-            .join(', '),
+        `The harness executed ${n('swapsExecuted')} swap(s) (${n('swapsCompared')} compared against the ` +
+          `reference pool, ${n('swapsSkipped')} skipped), opened ${n('positionsOpened')} and closed ` +
+          `${n('positionsClosed')} position(s), made ${n('donations')} donation(s) and ran ` +
+          `${n('priceChecks')} price check(s)` +
+          (observations.sequences !== undefined ? ` over ${observations.sequences} sequence(s)` : '') +
+          '. An invariant with no relevant observations is reported inconclusive, not passed.',
         '',
       );
     }
   }
 
-  // --- invariants ---
-  if (invariants.length > 0) {
-    out.push('## Invariants', '');
-    out.push('| | Invariant | Result | Detail |', '| --- | --- | --- | --- |');
-    for (const inv of invariants) {
-      const icon =
-        inv.status === 'passed'
-          ? '✅'
-          : inv.status === 'failed'
-            ? '❌'
-            : inv.status === 'not-applicable'
-              ? '➖'
-              : '⚠️';
-      out.push(`| ${icon} | ${inv.id} ${inv.name} | ${inv.status} | ${inv.detail ?? ''} |`);
-    }
-    out.push('');
-
-    for (const inv of invariants) {
-      if (inv.status !== 'failed' || !inv.counterexample) continue;
-      out.push(`### Counterexample for ${inv.id}`, '');
-      if (inv.counterexample.revertSelector) {
-        out.push(`Hook reverted with \`${inv.counterexample.revertSelector}\`.`, '');
-      }
-      if (inv.counterexample.sequence?.length) {
-        out.push('```');
-        inv.counterexample.sequence.forEach((step) =>
-          out.push(`${step.signature ?? step.target ?? ''} ${step.calldata ?? ''}`.trim()),
-        );
-        out.push('```', '');
-      }
-    }
-  }
-
-  // --- engines and coverage ---
+  // --- coverage ---
   out.push('## Analysis coverage', '');
   out.push('| Engine | Status | Findings | Notes |', '| --- | --- | --- | --- |');
   for (const e of engines) {
-    out.push(
-      `| ${e.displayName ?? e.engine} | ${e.status}${e.errorCode ? ` (${e.errorCode})` : ''} | ${e.findingCount ?? 0} | ${e.reason ?? ''} |`,
-    );
+    out.push(`| ${e.displayName ?? e.engine} | ${e.status}${e.errorCode ? ` (${e.errorCode})` : ''} | ${e.findingCount ?? 0} | ${cell(e.reason ?? '')} |`);
   }
   out.push('');
-
-  const observations = coverage.observations as HarnessObservations | undefined;
-  if (observations) {
-    const n = (key: keyof HarnessObservations): number => observations[key] ?? 0;
+  const fromEngine = permissions.fromEngine as Record<string, boolean> | undefined;
+  const fromRuntime = permissions.fromRuntime as Record<string, boolean> | undefined;
+  const disagreement = permissions.disagreement as string[] | undefined;
+  if (fromEngine && fromRuntime) {
     out.push(
-      `The harness executed ${n('swapsExecuted')} swap(s) (${n('swapsCompared')} compared against the ` +
-        `reference pool, ${n('swapsSkipped')} skipped), opened ${n('positionsOpened')} and closed ` +
-        `${n('positionsClosed')} position(s), made ${n('donations')} donation(s) and ran ` +
-        `${n('priceChecks')} price check(s)` +
-        (observations.sequences !== undefined ? ` over ${observations.sequences} sequence(s)` : '') +
-        '. An invariant with no relevant observations is reported inconclusive, not passed.',
+      disagreement && disagreement.length > 0
+        ? `> ⚠️ **Permissions disagree.** Static analysis and the deployed runtime differ on ${disagreement.map((d) => `\`${d}\``).join(', ')}: one of the two analyses is looking at the wrong contract.`
+        : 'Permissions resolved by static analysis and derived from the deployed runtime code agree.',
       '',
     );
   }
-
   const uncovered = (coverage.uncoveredFunctions ?? []) as UncoveredFunction[];
   if (uncovered.length > 0) {
     out.push(
-      `> ⚠️ **${uncovered.length} function(s) were not analysed.** Slither could not lift them ` +
-        'to IR and continued silently. Findings below do not cover them — this is not the same ' +
-        'as those functions being clean. See `HR-E205`.',
+      `> ⚠️ **${uncovered.length} function(s) in the compilation unit were not analysed.** Slither could not lift them ` +
+        'to IR and continued silently. Findings above do not cover them; that is not the same as those functions being clean. See `HR-E205`.',
       '',
     );
-    for (const u of uncovered) {
-      out.push(`- \`${u.contract}.${u.function}\``);
-    }
+    for (const u of uncovered) out.push(`- \`${u.contract}.${u.function}\``);
     out.push('');
   }
-
   if (Number(coverage.corroboratedFindings ?? 0) > 0) {
     out.push(
-      `${coverage.corroboratedFindings} finding(s) were confirmed independently by engines built ` +
-        'on different analysis foundations, and carry raised confidence as a result.',
+      `${coverage.corroboratedFindings} finding(s) were confirmed independently by engines built on different ` +
+        'analysis foundations and carry raised confidence as a result.',
       '',
     );
   }

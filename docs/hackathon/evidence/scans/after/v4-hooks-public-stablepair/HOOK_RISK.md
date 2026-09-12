@@ -1,22 +1,54 @@
-# Hook Risk Report
+# Hook Risk Report — StablePairHook
 
-**LOW risk** — 5/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
+Executable assessment against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework): static detectors, a differential twin-pool harness, and the framework’s scoring rubric. Unmeasured dimensions are excluded from the total, never counted as zero.
 
-> **Tier is undetermined.** 5/33 from what could be measured, up to 25/33 if every unmeasured dimension were at its maximum — between low and high. Unmeasured dimensions are excluded from the total, never counted as zero.
-
-❌ **Gate failed.**
-- the differential harness failed: harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa13000000000000
-- 1 finding(s) at or above high: StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working …
-
-## What was assessed
+## Summary
 
 | | |
 | --- | --- |
-| Contract | `StablePairHook` |
-| Source | `src/stable/StablePairHook.sol` |
-| Mode | source |
+| Contract | `StablePairHook` in `src/stable/StablePairHook.sol` |
+| Compiler | solc 0.8.26 |
+| Risk tier | **LOW** 5/33, undetermined up to HIGH 25/33 |
+| Gate | ❌ Failed (2 reasons below) |
+| Findings | 1 high · 1 classification |
+| Dimensions | 1 measured · 2 declared · 6 unmeasured |
+| Static analysis | ok |
+| Differential harness | failed (HR-E304) |
+| Invariants | ⚠️ I1 inconclusive · ⚠️ I2 inconclusive · ⚠️ I3 inconclusive |
+| Tool | hookrisk 0.1.0, rubric e7e8da52fd5717b6eb4517ea779b766f63148c41 |
 
-### Hook profile
+> **The tier is a range.** 5/33 is the sum of what could be measured or was declared; 6 dimensions have no detector or declaration. At their maximum the hook would score 25/33 (high). Declare them in `hookrisk.toml` to close the range.
+
+### Why the gate failed
+
+1. the differential harness failed: harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa13000000000000
+2. 1 finding(s) at or above high: StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working …
+
+## Findings
+
+| # | Severity | Rule | Finding | Location | Confidence | Engines |
+| --- | --- | --- | --- | --- | --- | --- |
+| F1 | 🟠 High | HS-02 `flag-implementation-divergence` | `afterInitialize` is declared but has no working implementation | `src/stable/StablePairHook.sol:25` | medium | hookrisk |
+
+### F1 · 🟠 High · `afterInitialize` is declared but has no working implementation
+
+HS-02 `flag-implementation-divergence` · `src/stable/StablePairHook.sol:25` · confidence **medium**
+
+StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working `afterInitialize` implementation. The PoolManager will call it on every matching pool operation and the call will revert, making the pool unusable for that operation.
+
+Reported by `hookrisk/hookrisk-flag-divergence`.
+
+## Classifications
+
+Properties of the hook that change how it is scored or tested. They are informational and never fail the gate.
+
+| Rule | Classification | Applies to | Detail |
+| --- | --- | --- | --- |
+| C-01 `callback-intentionally-disabled` | `beforeInitialize` is disabled by design (deliberate revert) | `src/stable/StablePairHook.sol:25` (`beforeInitialize`) | StablePairHook (src/stable/StablePairHook.sol#25-259) overrides `beforeInitialize` (inherited from BaseDynamicFeeHook._beforeInitialize) with `revert InvalidInitializer()`, so PoolManager-routed pool initialisation is disabled by design; the differential harness records such reverts when it runs. |
+
+## Hook profile
+
+The static engine’s structural measurement of the contract. Complexity is derived from these metrics; the rule that fired is quoted in the score table’s evidence.
 
 | Metric | Value |
 | --- | --- |
@@ -28,8 +60,6 @@
 | Returns a delta | false |
 | Owner-only surface | false |
 | Permissions declared | `beforeInitialize`, `afterInitialize`, `beforeAddLiquidity`, `afterAddLiquidity`, `beforeSwap`, `afterSwap` |
-
-Complexity is derived from these metrics; the rule that fired is in the score table’s evidence.
 
 ## Score
 
@@ -47,7 +77,31 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 
 ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
+<details><summary>Evidence per dimension</summary>
+
+- **Complexity**
+  - hook-profile metrics: callbacksImplemented=4, callbacksDeclared=6, stateWritesInCallbacks=1, externalCallsInSwapPath=0, internalFunctionsReachableFromCallbacks=9, usesReturnsDelta=false, hasOwnerOnlyFunctions=false
+  - Scored 2 by rule `stateWritesInCallbacks >= 1 || callbacksImplemented >= 3`: Hook state written in callbacks is the 'branching logic' the prose names first; three or more callbacks is its 'number of callbacks'. (hookrisk’s interpretation; the framework publishes no brackets)
+  - 1 flag-implementation-divergence finding(s)
+  - The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target.
+- **Custom math**
+  - Not measured: no detector for rounding-direction yet.
+- **External dependencies**
+  - Not measured: no detector for external-call-in-swap-path yet.
+- **TVL potential**
+  - Declared in hookrisk.toml. hookrisk does not measure tvlPotential.
+- **Team maturity**
+  - Declared in hookrisk.toml. hookrisk does not measure teamMaturity.
+- **Upgradeability**
+  - Not measured: no detector for upgradeable-hook (needs blocksec, which did not run); selfdestruct requires blocksec, which did not run.
+- **Price impacting behavior**
+  - Not measured: no detector for unbounded-dynamic-fee yet.
+
+</details>
+
 ## Security plan
+
+The strongest requirement across the tier baseline and every fired trigger, with the source of each.
 
 | Action | Strength | Because |
 | --- | --- | --- |
@@ -57,35 +111,15 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 | Audit by a math and invariants specialist | Optional | `tier:low` |
 | Continuous monitoring with anomaly detection | Optional | `tier:low` |
 
-## Findings
+## Dynamic analysis
 
-### 🟠 StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working …
-
-`flag-implementation-divergence` (`afterInitialize`) · **high** · confidence **medium**
-
-`src/stable/StablePairHook.sol:25`
-
-StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working `afterInitialize` implementation. The PoolManager will call it on every matching pool operation and the call will revert, making the pool unusable for that operation.
-
-Reported by: `hookrisk/hookrisk-flag-divergence`
-
-### ℹ️ StablePairHook (src/stable/StablePairHook.sol#25-259) overrides `beforeInitialize` (inherited from BaseDynamicFeeHook._beforeInitialize) with `revert …
-
-`callback-intentionally-disabled` (`beforeInitialize`) · **info** · confidence **high**
-
-`src/stable/StablePairHook.sol:25`
-
-StablePairHook (src/stable/StablePairHook.sol#25-259) overrides `beforeInitialize` (inherited from BaseDynamicFeeHook._beforeInitialize) with `revert InvalidInitializer()`, so PoolManager-routed pool initialisation is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports.
-
-Reported by: `hookrisk/hookrisk-disabled-callback`
-
-## Invariants
+Differential twin-pool harness: **failed** (HR-E304). harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).
 
 | | Invariant | Result | Detail |
 | --- | --- | --- | --- |
-| ⚠️ | I1 Conservation and solvency | inconclusive | harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
-| ⚠️ | I2 No undeclared extraction | inconclusive | harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
-| ⚠️ | I3 Exit liveness | inconclusive | harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
+| ⚠️ | I1 Conservation and solvency | inconclusive | see the harness status above |
+| ⚠️ | I2 No undeclared extraction | inconclusive | see the harness status above |
+| ⚠️ | I3 Exit liveness | inconclusive | see the harness status above |
 
 ## Analysis coverage
 
@@ -94,7 +128,7 @@ Reported by: `hookrisk/hookrisk-disabled-callback`
 | hookrisk Slither detectors | ok | 3 |  |
 | Differential harness (Foundry) | failed (HR-E304) | 0 | harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
 
-> ⚠️ **26 function(s) were not analysed.** Slither could not lift them to IR and continued silently. Findings below do not cover them — this is not the same as those functions being clean. See `HR-E205`.
+> ⚠️ **26 function(s) in the compilation unit were not analysed.** Slither could not lift them to IR and continued silently. Findings above do not cover them; that is not the same as those functions being clean. See `HR-E205`.
 
 - `BaseAggregatorHook._getFullDebt`
 - `BaseAggregatorHook._getFullCredit`
