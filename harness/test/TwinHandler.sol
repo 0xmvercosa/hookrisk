@@ -17,6 +17,8 @@ import {PoolModifyLiquidityTest} from "@uniswap/v4-core/src/test/PoolModifyLiqui
 import {PoolDonateTest} from "@uniswap/v4-core/src/test/PoolDonateTest.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
+import {RevertReason} from "./RevertReason.sol";
+
 /// @title Bounded action generator that keeps two pools in lockstep
 /// @notice Foundry's invariant runner calls these functions with fuzzed
 /// arguments in random order. Each applies the same operation to the vanilla
@@ -181,10 +183,7 @@ contract TwinHandler is CommonBase, StdCheats, StdUtils {
         (int24 tickLower, int24 tickUpper) = _boundRange(rangeSeed);
 
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            liquidityDelta: int256(uint256(liquidity)),
-            salt: bytes32(0)
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liquidity)), salt: bytes32(0)
         });
 
         uint256 snap = vm.snapshotState();
@@ -417,46 +416,10 @@ contract TwinHandler is CommonBase, StdCheats, StdUtils {
         (sqrtPriceX96,,,) = manager.getSlot0(hookedKey.toId());
     }
 
-    /// @dev ERC-7751 wrapper v4 uses to bubble a failed hook call:
-    /// `WrappedError(address target, bytes4 selector, bytes reason, bytes details)`.
-    bytes4 internal constant WRAPPED_ERROR = 0x90bfb865;
-
-    /// @notice Unwrap an ERC-7751 error chain down to the hook's own revert.
-    ///
-    /// When a hook reverts, the PoolManager does not propagate the reason
-    /// verbatim — `CustomRevert.bubbleUpAndRevertWith` wraps it with the target,
-    /// the callback selector, and the original reason nested inside. The raw
-    /// bytes a caller sees therefore identify v4's wrapper, not the hook's error.
-    ///
-    /// Reporting `WrappedError(0x…, 0x21d0ee70, 0x…)` tells a user nothing.
-    /// Reporting `TemporarilyUnavailable()` tells them exactly which branch in
-    /// their hook rejected the withdrawal. The loop handles nesting, since a
-    /// hook that itself calls into another contract produces a chain.
-    function _rootCause(bytes memory data) internal view returns (bytes memory) {
-        // Bound the walk: a malformed or adversarial chain must not spin here.
-        for (uint256 depth = 0; depth < 8; depth++) {
-            if (data.length < 4 || bytes4(data) != WRAPPED_ERROR) break;
-
-            bytes memory payload = new bytes(data.length - 4);
-            for (uint256 i = 0; i < payload.length; i++) {
-                payload[i] = data[i + 4];
-            }
-
-            // A truncated or non-conforming payload leaves the outer data as the
-            // best available answer rather than reverting inside a diagnostic.
-            try this.decodeWrapped(payload) returns (bytes memory reason) {
-                if (reason.length == 0) break;
-                data = reason;
-            } catch {
-                break;
-            }
-        }
-        return data;
-    }
-
-    /// @dev External purely so `_rootCause` can guard the decode with try/catch.
-    function decodeWrapped(bytes calldata payload) external pure returns (bytes memory reason) {
-        (, , reason, ) = abi.decode(payload, (address, bytes4, bytes, bytes));
+    /// @dev The hook's own revert, with v4's ERC-7751 wrapper peeled off. See
+    /// `RevertReason` for why the raw bytes are not what a user needs to see.
+    function _rootCause(bytes memory data) internal pure returns (bytes memory) {
+        return RevertReason.rootCause(data);
     }
 
     /// @dev Produce a spacing-aligned tick range around the starting price.

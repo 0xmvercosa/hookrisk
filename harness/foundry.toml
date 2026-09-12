@@ -8,9 +8,12 @@ evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
 bytecode_hash = "none"
-# `deployCodeTo` writes a hook's runtime code to a flag-bearing address, which
-# needs the artifact on disk under a stable name.
-fs_permissions = [{ access = "read", path = "./out" }]
+# Read: `vm.getCode` resolves fixture artifacts from `out/`. Write: the generic
+# harness leaves `out/hookrisk-run-<id>.json` there at the end of `setUp` so the
+# CLI can tell a run that never started from a run with nothing to report.
+# Foundry matches permissions by path prefix, so `./out` is the narrowest scope
+# that admits a file whose name is not known until runtime.
+fs_permissions = [{ access = "read-write", path = "./out" }]
 # Deliberately off. v4-core builds with via_ir for gas snapshots; we build for
 # analysis, and via_ir roughly triples compile time for no benefit to us. If a
 # future v4-core release stack-overflows without it, flip it here rather than

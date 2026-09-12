@@ -3,8 +3,6 @@ pragma solidity ^0.8.26;
 
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 import {TwinPools} from "./TwinPools.sol";
@@ -20,10 +18,19 @@ import {TwinHandler} from "./TwinHandler.sol";
 /// directory — Foundry's `deployCodeTo` resolves `File.sol:Contract` against
 /// exactly that path — and then sets:
 ///
-///   HOOKRISK_ARTIFACT       `MyHook.sol:MyHook`
-///   HOOKRISK_FLAGS          decimal OR of the Hooks.*_FLAG constants
-///   HOOKRISK_MAX_FEE_BIPS   the declared fee bound from hookrisk.toml
-///   HOOKRISK_CUSTOM_CURVE   1 when the hook holds beforeSwapReturnDelta
+///   HOOKRISK_ARTIFACT          `MyHook.sol:MyHook`
+///   HOOKRISK_CREATION_CODE     hex creation bytecode (see TwinPools._creationCode)
+///   HOOKRISK_FLAGS             decimal OR of the Hooks.*_FLAG constants; 0 asks
+///                              the harness to derive them from the runtime code
+///   HOOKRISK_RUNTIME_CODE      hex deployed bytecode, consulted when FLAGS is 0
+///   HOOKRISK_CONSTRUCTOR_ARGS  hex ABI-encoded constructor arguments with
+///                              sentinel addresses (see TwinPools.SENTINEL_*);
+///                              empty means `abi.encode(manager)`
+///   HOOKRISK_MAX_FEE_BIPS      the declared fee bound from hookrisk.toml
+///   HOOKRISK_CUSTOM_CURVE      1 when the hook holds beforeSwapReturnDelta;
+///                              overridden when the flags were derived
+///   HOOKRISK_RUN_ID            opaque token; `out/hookrisk-run-<id>.json` is
+///                              written at the end of setUp with what was decided
 ///
 /// ## Why a custom curve changes the invariants
 ///
@@ -71,13 +78,13 @@ contract GenericHookInvariants is TwinPools {
             return;
         }
 
-        uint160 flags = uint160(vm.envOr("HOOKRISK_FLAGS", uint256(0)));
         declaredFeeBips = vm.envOr("HOOKRISK_MAX_FEE_BIPS", uint256(0));
-        customCurve = vm.envOr("HOOKRISK_CUSTOM_CURVE", uint256(0)) == 1;
 
-        _setUpTwinPools(artifact, flags);
-        _seed(vanillaKey);
-        _seed(hookedKey);
+        _setUpTwinPools(_specFromEnv(artifact));
+        _seedTwins();
+        // The hook's own permissions win over the CLI's static guess when the
+        // harness derived them; `run` holds whichever applied.
+        customCurve = run.customCurve;
 
         handler = new TwinHandler(manager, swapRouter, modifyLiquidityRouter, donateRouter, vanillaKey, hookedKey);
         _fund(address(handler), 1e27);
@@ -96,14 +103,10 @@ contract GenericHookInvariants is TwinPools {
         targetContract(address(handler));
 
         configured = true;
-    }
 
-    function _seed(PoolKey memory key) internal {
-        modifyLiquidityRouter.modifyLiquidity(
-            key,
-            ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e21, salt: bytes32(0)}),
-            ""
-        );
+        // Last, so that the file's existence means "setUp succeeded" and its
+        // absence means "the run died before any invariant ran".
+        _writeRunFile(vm.envOr("HOOKRISK_RUN_ID", string("")));
     }
 
     // --- I1 -------------------------------------------------------------------
@@ -118,9 +121,13 @@ contract GenericHookInvariants is TwinPools {
 
     /// @notice Output never falls short of an unhooked pool by more than the
     /// declared fee. Skipped for custom-curve hooks, where the comparison is
-    /// meaningless by construction.
+    /// meaningless by construction, and when the hook rejected the seed
+    /// position: a hooked pool with no v4 liquidity returns nothing for every
+    /// swap, which would read as a 100% skim. That the hook refuses
+    /// PoolManager liquidity is reported through the run file instead, where
+    /// the CLI can name it for what it is rather than as extraction.
     function invariant_I2_noUndeclaredExtraction() public view {
-        if (!configured || customCurve) return;
+        if (!configured || customCurve || !run.hookedSeeded) return;
         if (handler.swapsCompared() == 0) return;
 
         assertLe(
@@ -138,16 +145,18 @@ contract GenericHookInvariants is TwinPools {
         if (!configured || !customCurve) return;
         if (handler.priceChecks() == 0) return;
 
-        assertEq(
-            handler.monotonicityViolations(),
-            0,
-            "I2b: a swap moved the price in the wrong direction"
-        );
+        assertEq(handler.monotonicityViolations(), 0, "I2b: a swap moved the price in the wrong direction");
     }
 
     /// @notice A swap that works without the hook must work with it.
+    ///
+    /// Not asserted when the hook rejected the seed position. A custom-curve
+    /// hook that holds its own reserves has none here — the harness cannot
+    /// drive a liquidity path it does not know — so its swaps reverting says
+    /// nothing about the hook. The run file carries `seeded: hooked-failed`
+    /// and the seed revert so the CLI can report the untested surface.
     function invariant_I2_hookDoesNotBlockSwaps() public view {
-        if (!configured) return;
+        if (!configured || !run.hookedSeeded) return;
         assertFalse(handler.hookedSwapReverted(), "I2: swap reverted only on the hooked pool");
     }
 
@@ -169,12 +178,11 @@ contract GenericHookInvariants is TwinPools {
 
     function _trackedBalance(Currency currency) internal view returns (uint256) {
         MockERC20 token = MockERC20(Currency.unwrap(currency));
-        return token.balanceOf(address(this)) + token.balanceOf(address(handler))
-            + token.balanceOf(address(manager)) + token.balanceOf(address(hook))
-            + token.balanceOf(address(swapRouter)) + token.balanceOf(address(modifyLiquidityRouter))
-            + token.balanceOf(address(swapRouterNoChecks)) + token.balanceOf(address(modifyLiquidityNoChecks))
-            + token.balanceOf(address(donateRouter)) + token.balanceOf(address(takeRouter))
-            + token.balanceOf(address(claimsRouter)) + token.balanceOf(address(nestedActionRouter))
-            + token.balanceOf(address(actionsRouter));
+        return token.balanceOf(address(this)) + token.balanceOf(address(handler)) + token.balanceOf(address(manager))
+            + token.balanceOf(address(hook)) + token.balanceOf(address(swapRouter))
+            + token.balanceOf(address(modifyLiquidityRouter)) + token.balanceOf(address(swapRouterNoChecks))
+            + token.balanceOf(address(modifyLiquidityNoChecks)) + token.balanceOf(address(donateRouter))
+            + token.balanceOf(address(takeRouter)) + token.balanceOf(address(claimsRouter))
+            + token.balanceOf(address(nestedActionRouter)) + token.balanceOf(address(actionsRouter));
     }
 }
