@@ -66,7 +66,15 @@
           "type": "boolean",
           "description": "False when the explorer had no verified source. Every finding derived from source analysis is then absent, and findings from bytecode carry reduced confidence."
         },
-        "solcVersion": { "type": "string" }
+        "solcVersion": { "type": "string" },
+        "artifactDir": {
+          "type": "string",
+          "description": "Project-relative directory the compiled artifacts were read from — forge's `out` setting, e.g. `out` or `foundry-out`."
+        },
+        "projectConfigSource": {
+          "enum": ["forge-config", "fallback"],
+          "description": "`forge-config` when artifactDir and solcVersion came from `forge config --json`; `fallback` when forge could not be asked and built-in defaults (`out`, 0.8.26) were assumed."
+        }
       }
     },
 
@@ -86,6 +94,26 @@
         "implemented": {
           "$ref": "#/$defs/permissionSet",
           "description": "Callbacks with a working implementation. A callback that only reverts is not implemented."
+        },
+        "fromRuntime": {
+          "$ref": "#/$defs/permissionSet",
+          "description": "What the differential harness deployed the hook under. Read from getHookPermissions() on the compiled runtime code when the source declaration is inherited, otherwise the flags the CLI supplied; either way, the set the PoolManager obeyed during the run."
+        },
+        "harnessRun": {
+          "type": "object",
+          "description": "The harness's own account of its setUp, from the run record it writes once the twin pools are built.",
+          "additionalProperties": false,
+          "properties": {
+            "flags": { "type": "integer", "minimum": 0, "description": "The 14-bit flag word the hook was deployed at." },
+            "permissionsDerived": { "type": "boolean", "description": "True when the harness read the flags from the runtime code rather than receiving them." },
+            "customCurve": { "type": "boolean", "description": "beforeSwapReturnDelta was set; I2b replaces I2." },
+            "dynamicFee": { "type": "boolean", "description": "The hooked pool had to be initialised with LPFeeLibrary.DYNAMIC_FEE_FLAG because a static fee reverted." },
+            "seeded": {
+              "enum": ["both", "hooked-failed"],
+              "description": "`hooked-failed` means the hook rejected the initial PoolManager liquidity, so the hooked pool has no v4 liquidity and only a custom-curve hook can trade."
+            },
+            "hookedSeedRevert": { "type": "string", "description": "Raw revert from the failed seed, wrapper included." }
+          }
         },
         "divergences": {
           "type": "array",
@@ -314,7 +342,7 @@
         "additionalProperties": false,
         "required": ["engine", "status"],
         "properties": {
-          "engine": { "type": "string", "examples": ["hookrisk", "blocksec"] },
+          "engine": { "type": "string", "examples": ["hookrisk", "blocksec", "harness"] },
           "displayName": { "type": "string" },
           "version": { "type": "string" },
           "status": { "enum": ["ok", "skipped", "failed"] },
@@ -357,7 +385,14 @@
           }
         },
         "staticAnalysisSkipped": { "type": "boolean" },
-        "dynamicAnalysisSkipped": { "type": "boolean" }
+        "dynamicAnalysisSkipped": {
+          "type": "boolean",
+          "description": "True whenever the differential harness produced no invariant results — because it was skipped with --skip-dynamic, declined to run, or failed. Never false unless the invariants were actually measured."
+        },
+        "harnessStatus": {
+          "enum": ["ok", "skipped", "failed"],
+          "description": "Mirrors the harness engine row. `failed` means the harness started and could not complete (setUp reverted, forge crashed); the invariants are then `inconclusive`, not `passed`."
+        }
       }
     },
 
@@ -420,9 +455,11 @@
             "external-call-in-swap-path",
             "unbounded-dynamic-fee",
             "custom-accounting",
-            "rounding-direction"
+            "rounding-direction",
+            "callback-intentionally-disabled",
+            "unsupported-hook-abi"
           ],
-          "description": "Canonical taxonomy shared across engines, so the same defect found by two tools is one finding rather than two."
+          "description": "Canonical taxonomy shared across engines, so the same defect found by two tools is one finding rather than two. `callback-intentionally-disabled` and `unsupported-hook-abi` are classifications (INFO): a callback overridden with a deliberate revert to disable a PoolManager-routed operation, and a contract that looks like a v4 hook but uses an ABI hookrisk cannot analyse."
         },
         "title": { "type": "string" },
         "description": { "type": "string" },

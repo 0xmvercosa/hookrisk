@@ -241,6 +241,34 @@
       "match": ["timed out", "TIMEOUT"]
     },
     {
+      "code": "HR-E304",
+      "title": "Differential harness could not set up the twin pools",
+      "exitCode": 43,
+      "cause": "The hook was deployed, but building the pools around it failed: pool initialisation or the initial PoolManager liquidity reverted inside a hook callback, or forge exited before running a single sequence. Nothing about the hook's behaviour was observed. hookrisk reports this as a harness failure with every invariant `inconclusive` — deliberately not `passed`, and deliberately not absent, because a dynamic layer that did not run must not look like one that ran and found nothing.",
+      "fix": [
+        "Read the unwrapped revert in the reason: it names the callback (e.g. `beforeAddLiquidity (0x259982e5)`) and the hook's own error, decoded from v4's ERC-7751 `WrappedError` wrapper.",
+        "A hook that rejects PoolManager liquidity by design (a custom-curve hook holding its own reserves) is handled: the harness records `seeded = \"hooked-failed\"` and hookrisk marks I2/I3 not-applicable rather than failing. If you see this error instead, the harness in use predates that record — rebuild from the same checkout as the CLI.",
+        "A hook that reverts on a static LP fee is retried with `LPFeeLibrary.DYNAMIC_FEE_FLAG`; a revert on both means the hook's `beforeInitialize` needs state the harness does not provide.",
+        "Reproduce in isolation: `HOOKRISK_ARTIFACT=... forge test --match-contract GenericHookInvariants -vvvv` inside harness/, with the same environment the CLI logs under `--verbose`."
+      ],
+      "match": ["harness setUp failed", "setUp\\(\\).*Failure"],
+      "seeAlso": ["docs/INVARIANTS.md"]
+    },
+    {
+      "code": "HR-E305",
+      "title": "Hook constructor arguments could not be derived",
+      "exitCode": 44,
+      "cause": "The harness deploys the hook itself, so it has to supply whatever the constructor takes. It can derive two shapes on its own — no arguments, or a single `IPoolManager`/`address` — and needs to be told about anything else. This is reported as a skip with the ABI types in the message rather than guessed, because a constructor fed zero addresses produces a hook that reverts somewhere inside `setUp` for a reason nobody can read.",
+      "fix": [
+        "Add `[harness] constructorArgs` to hookrisk.toml: an array of strings, one per constructor argument in ABI order.",
+        "Use the placeholders for anything the harness deploys itself: `$poolManager`, `$currency0`, `$currency1`, `$owner` (the test contract) and `$hook` (the hook's own flag-bearing address). Each is substituted word-for-word before deployment.",
+        "Write every other value the way `cast abi-encode` accepts it — decimal integers, 0x-prefixed addresses and bytes, `true`/`false`. The values are passed to cast verbatim; a cast parse error is repeated in the skip reason.",
+        "Struct (tuple) constructor arguments are not supported yet; the skip reason says so when that is the case."
+      ],
+      "match": ["constructorArgs", "constructor takes .* argument"],
+      "seeAlso": ["docs/INVARIANTS.md"]
+    },
+    {
       "code": "HR-E401",
       "title": "RPC endpoint is unset or unreachable",
       "exitCode": 50,

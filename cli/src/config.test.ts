@@ -127,6 +127,63 @@ describe('fromDocument', () => {
   });
 });
 
+describe('[harness]', () => {
+  test('parses constructorArgs as an ordered list of strings', () => {
+    const config = fromDocument(parseToml(`
+      [harness]
+      constructorArgs = ["$poolManager", "3000", "$owner"]
+    `));
+    assert.deepEqual(config.harness.constructorArgs, ['$poolManager', '3000', '$owner']);
+  });
+
+  test('leaves constructorArgs undefined when the table is absent', () => {
+    // Undefined, not empty: the harness distinguishes "not configured" (derive
+    // what it can) from "configured as no arguments".
+    const config = fromDocument({ declared: { teamMaturity: 1, tvlPotential: 1 } });
+    assert.deepEqual(config.harness, {});
+    assert.equal(config.harness.constructorArgs, undefined);
+  });
+
+  test('accepts an explicitly empty list', () => {
+    const config = fromDocument(parseToml('[harness]\nconstructorArgs = []'));
+    assert.deepEqual(config.harness.constructorArgs, []);
+  });
+
+  test('rejects a scalar or a list with non-string entries', () => {
+    // A bare 3000 would reach cast as the number 3000 today and as something
+    // else the day the parser learns floats; strings keep the contract exact.
+    assert.throws(() => fromDocument({ harness: { constructorArgs: '$poolManager' } }), HookriskError);
+    assert.throws(() => fromDocument({ harness: { constructorArgs: ['$poolManager', 3000] } }), HookriskError);
+  });
+
+  test('rejects an unknown key instead of silently skipping the harness', () => {
+    try {
+      fromDocument({ harness: { constructorArg: ['$poolManager'] } });
+      assert.fail('should have thrown');
+    } catch (err) {
+      assert.ok(err instanceof HookriskError);
+      assert.match(err.detail ?? '', /\[harness\] has unknown key "constructorArg"/);
+    }
+  });
+
+  test('does not disturb [declared], [gate] or [engines]', () => {
+    const config = fromDocument(parseToml(`
+      [declared]
+      teamMaturity = 1
+      tvlPotential = 2
+      [gate]
+      maxTier = "low"
+      [engines]
+      blocksec = true
+      [harness]
+      constructorArgs = ["$poolManager"]
+    `));
+    assert.deepEqual(config.declared, { teamMaturity: 1, tvlPotential: 2 });
+    assert.deepEqual(config.gate, { maxTier: 'low' });
+    assert.deepEqual(config.engines, { blocksec: true });
+  });
+});
+
 describe('assertDeclarationsComplete', () => {
   test('passes when the unobservable dimensions are declared', () => {
     const config = fromDocument({ declared: { teamMaturity: 1, tvlPotential: 2 } });

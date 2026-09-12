@@ -45,11 +45,22 @@ export interface GatePolicy {
   failOnPartialCoverage?: boolean;
 }
 
+/** How the differential harness should construct the hook. */
+export interface HarnessConfig {
+  /**
+   * One value per constructor ABI input. `$poolManager`, `$currency0`,
+   * `$currency1`, `$owner` and `$hook` are replaced with the harness's own
+   * addresses; anything else is passed literally to `cast abi-encode`.
+   */
+  constructorArgs?: string[];
+}
+
 export interface HookriskConfig {
   target?: string;
   declared: DeclaredInputs;
   gate: GatePolicy;
   engines: Record<string, boolean>;
+  harness: HarnessConfig;
   /** Path the config was read from, recorded in the manifest. */
   sourcePath?: string;
 }
@@ -231,6 +242,7 @@ export function fromDocument(document: TomlDocument, sourcePath?: string): Hookr
   const declaredTable = (document.declared as TomlTable) ?? {};
   const gateTable = (document.gate as TomlTable) ?? {};
   const enginesTable = (document.engines as TomlTable) ?? {};
+  const harnessTable = (document.harness as TomlTable) ?? {};
 
   const declared: DeclaredInputs = {};
   for (const [key, value] of Object.entries(declaredTable)) {
@@ -287,11 +299,32 @@ export function fromDocument(document: TomlDocument, sourcePath?: string): Hookr
     engines[key] = Boolean(value);
   }
 
+  // Strict on purpose. A misspelt key here (`constructorArg`) would leave the
+  // harness without arguments and skip the dynamic layer with a message about
+  // a missing key the author believes they wrote.
+  const harness: HarnessConfig = {};
+  for (const [key, value] of Object.entries(harnessTable)) {
+    if (key !== 'constructorArgs') {
+      throw new HookriskError('HR-E101', {
+        detail: `[harness] has unknown key ${JSON.stringify(key)}.`,
+        context: { known: 'constructorArgs' },
+      });
+    }
+    if (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string')) {
+      throw new HookriskError('HR-E101', {
+        detail: `[harness] constructorArgs must be an array of strings, one per constructor argument, got ${JSON.stringify(value)}.`,
+        context: { example: 'constructorArgs = ["$poolManager", "3000", "$owner"]' },
+      });
+    }
+    harness.constructorArgs = value as string[];
+  }
+
   return {
     target: typeof document.target === 'string' ? document.target : undefined,
     declared,
     gate,
     engines,
+    harness,
     sourcePath,
   };
 }
@@ -375,5 +408,15 @@ hookrisk = true
 # Runs as an isolated container and needs \`docker pull futuretech6/hookscan\`.
 # Findings both engines agree on are merged into one at raised confidence.
 blocksec = false
+
+[harness]
+
+# Constructor arguments for the differential harness, one string per ABI input.
+# Not needed when the constructor takes nothing or only the IPoolManager.
+# Placeholders are replaced with the harness's own deployment:
+#   $poolManager  $currency0  $currency1  $owner (the test contract)  $hook
+# Anything else is passed literally to \`cast abi-encode\`, so write values the
+# way cast accepts them (decimal integers, 0x-prefixed addresses and bytes).
+# constructorArgs = ["$poolManager", "3000", "$owner"]
 `;
 }

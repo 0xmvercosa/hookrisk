@@ -158,13 +158,118 @@ runs and calls so a reader can judge how hard the harness actually looked.
 
 ### Constructor shape
 
-The hook must be constructible from `IPoolManager` alone. That covers the
-`BaseHook` convention and most hooks in the wild; anything with additional
-constructor arguments is reported as `skipped`, with the reason, rather than
-silently omitted.
+The harness deploys the hook itself, so it has to supply whatever the
+constructor takes. Two shapes need no configuration: no arguments at all (a
+factory-style hook such as `V2PairHook`), and a single `IPoolManager` or
+`address` (the `BaseHook` convention). Anything else is declared in
+`hookrisk.toml`, one string per constructor argument in ABI order:
+
+```toml
+[harness]
+constructorArgs = ["$poolManager", "3000", "$owner"]
+```
+
+Five placeholders stand for things the harness deploys and therefore knows the
+address of only at run time. Each is substituted word-for-word in the encoded
+arguments before the constructor runs:
+
+| Placeholder | Becomes |
+|---|---|
+| `$poolManager` | the `PoolManager` |
+| `$currency0`, `$currency1` | the two pool currencies |
+| `$owner` | the test contract, which is also `msg.sender` for every action |
+| `$hook` | the hook's own flag-bearing address |
+
+Everything else is passed verbatim to `cast abi-encode "constructor(<types>)"`,
+with the types read from the artifact ABI, so values are written the way cast
+accepts them. A count mismatch, a value cast cannot parse, or a struct argument
+(not supported yet) is reported as a skip that names the ABI types and the
+config key — `HR-E305` — rather than as a deployment that reverts for a reason
+nobody can read.
 
 A dynamic layer that quietly declines to run is worse than one that says it did
-not.
+not. Every reason the harness declines is in the manifest, under
+`engines[engine = "harness"].reason` and repeated on each skipped invariant.
+
+### Permissions the harness cannot see in the source
+
+The CLI reads `getHookPermissions()` out of the target file to place the hook
+at a flag-bearing address. Most hooks in the wild inherit that function from a
+base contract (every OpenZeppelin-based hook does), and the file being scanned
+does not contain it.
+
+Those hooks are not skipped. The CLI passes `HOOKRISK_FLAGS=0` together with
+the compiled runtime code, and the harness derives the flags itself: it etches
+the runtime code at a scratch address, calls `getHookPermissions()` on it, and
+deploys at the address those bits describe. The manifest records what was
+found under `permissions.fromRuntime`, with `permissions.harnessRun.permissionsDerived`
+set, so a reader can tell "read from the source" apart from "read from the
+bytecode" — and `customCurve` from that record, not the source, decides
+whether I2 or I2b applies.
+
+### Hooks that refuse PoolManager liquidity
+
+A custom-curve hook that keeps its own reserves commonly reverts
+`beforeAddLiquidity` outright: no v4 liquidity is allowed in its pool. The
+harness's initial seeding of the hooked pool then fails inside a callback.
+
+Before the run record existed this surfaced as a `setUp()` failure the CLI did
+not read, and the scan reported zero invariants with status `ok` — a dynamic
+layer that had not run, reporting exactly what a clean hook reports. Now:
+
+- the harness records `seeded = "hooked-failed"` and the wrapped revert;
+- a custom-curve hook is assessed normally, since it prices trades without
+  v4 liquidity;
+- a hook **without** a custom curve cannot trade in that state, so I2 and I3
+  are `not-applicable` with the reason, and I1 is still reported;
+- any other `setUp` failure is a harness **failure** (`HR-E304`): the engine
+  row says `failed`, every invariant is `inconclusive`, and the reason names
+  the callback and the hook's own error, unwrapped from v4's ERC-7751
+  `WrappedError` down to `Error(string)`, `Panic(uint256)` or the four-byte
+  selector.
+
+`coverage.dynamicAnalysisSkipped` is true in every one of these cases where no
+invariant was measured, not only under `--skip-dynamic`; `coverage.harnessStatus`
+says which.
+
+## The contract between the CLI and the harness
+
+Everything crosses the process boundary as environment variables in and one
+JSON file out. The variables the CLI sets on `forge test --match-contract
+GenericHookInvariants`:
+
+| Variable | Meaning |
+|---|---|
+| `HOOKRISK_ARTIFACT` | `File.sol:Contract`, for logging and for `vm.getCode` on the repository's own fixtures |
+| `HOOKRISK_CREATION_CODE` | hex creation bytecode from the artifact |
+| `HOOKRISK_RUNTIME_CODE` | hex `deployedBytecode` from the artifact; used to derive permissions when `HOOKRISK_FLAGS` is 0 |
+| `HOOKRISK_FLAGS` | decimal flag word from the source declaration; `0` means "derive from the runtime code" |
+| `HOOKRISK_CONSTRUCTOR_ARGS` | hex ABI-encoded constructor arguments with the placeholders above; empty means the legacy behaviour (`abi.encode(manager)` for a one-argument constructor, nothing for zero) |
+| `HOOKRISK_MAX_FEE_BIPS` | the declared fee bound from `hookrisk.toml` |
+| `HOOKRISK_CUSTOM_CURVE` | `1` when the source declares `beforeSwapReturnDelta`; overridden by the harness when it derived the flags itself |
+| `HOOKRISK_RUN_ID` | opaque token naming the run record |
+
+At the **end** of a successful `setUp` the harness writes
+`harness/out/hookrisk-run-<RUN_ID>.json`:
+
+```json
+{"flags": 2184, "customCurve": true, "dynamicFee": false,
+ "permissionsDerived": true, "seeded": "hooked-failed", "hookedSeedRevert": "0x…"}
+```
+
+`dynamicFee` means the hooked pool had to be initialised with
+`LPFeeLibrary.DYNAMIC_FEE_FLAG` because a static fee reverted. The CLI reads the
+record, deletes it, and copies it into the manifest under
+`permissions.harnessRun`. Its absence after a run whose permissions were to be
+derived is itself a failure: the invariants would otherwise be vouching for a
+configuration nobody can see.
+
+The artifact directory and the compiler version come from `forge config --json`
+in the target project (`out` and `solc`; when `solc` is unset, from the
+artifact's `metadata.compiler.version`), so a project with `out = 'foundry-out'`
+— Uniswap's own hooks repository — is found rather than told to build. Only when
+forge itself cannot be run are `out/` and 0.8.26 assumed, and the manifest says
+so under `target.projectConfigSource`.
 
 ### What it does not model
 

@@ -13,7 +13,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -30,9 +30,10 @@ import {
   buildManifest,
   renderMarkdown,
   validateManifest,
+  type HarnessSummary,
   type InvariantResult,
 } from './manifest.js';
-import { flagsFrom, parseDeclaredPermissions, runHarness } from './harness.js';
+import { parseDeclaredPermissions, permissionsFrom, resolveProject, runHarness } from './harness.js';
 import { toSarif } from './sarif.js';
 import { deriveScoringInput } from './scoring/derive.js';
 import { loadRubric } from './scoring/rubric.js';
@@ -196,14 +197,6 @@ function resolveTarget(target: string | undefined, projectRoot: string): {
   return { sourceFile, contractName };
 }
 
-/** Read the project's solc version from foundry.toml, defaulting sensibly. */
-function detectSolcVersion(projectRoot: string): string {
-  const path = join(projectRoot, 'foundry.toml');
-  if (!existsSync(path)) return '0.8.26';
-  const match = /^\s*solc\s*=\s*["']([^"']+)["']/m.exec(readFileSync(path, 'utf8'));
-  return match?.[1] ?? '0.8.26';
-}
-
 // --------------------------------------------------------------------------- //
 // Commands
 // --------------------------------------------------------------------------- //
@@ -236,11 +229,21 @@ async function commandScan(argv: string[]): Promise<number> {
     engines.push(new BlockSecEngine());
   }
 
+  // Where the artifacts are and which solc built them, from forge itself. Both
+  // the static engines (solc version) and the harness (artifact path) depend
+  // on it, and guessing either is how a built project gets told to build.
+  const project = await resolveProject(args.projectRoot, sourceFile, contractName);
+  for (const note of project.notes) log(`project: ${note}`);
+  log(
+    `project: out=${project.artifactDir} solc=${project.solcVersion} (${project.solcSource})` +
+      (project.artifactPath ? ` artifact=${project.artifactPath}` : ` artifact: ${project.artifactReason}`),
+  );
+
   const context: EngineContext = {
     projectRoot: args.projectRoot,
     sourceFile,
     contractName,
-    solcVersion: detectSolcVersion(args.projectRoot),
+    solcVersion: project.solcVersion,
     timeoutMs: args.timeoutMs,
     log,
   };
@@ -287,24 +290,49 @@ async function commandScan(argv: string[]): Promise<number> {
 
   // --- invariants ---
   // The dynamic layer executes the hook rather than reading it, so it needs the
-  // permission set to place the hook at a flag-bearing address.
-  const permissions =
-    parseDeclaredPermissions(readFileSync(resolve(args.projectRoot, sourceFile), 'utf8')) ?? {};
+  // permission set to place the hook at a flag-bearing address. Null when this
+  // file inherits getHookPermissions(); the harness then derives the flags from
+  // the compiled runtime code and reports what it found.
+  const permissions = parseDeclaredPermissions(readFileSync(resolve(args.projectRoot, sourceFile), 'utf8'));
 
   let invariants: InvariantResult[] = [];
+  let harness: HarnessSummary = { version: 'n/a', status: 'skipped', reason: '--skip-dynamic', durationMs: 0 };
+  const permissionsSection: Record<string, unknown> = {};
+  if (permissions) permissionsSection.fromSource = permissions;
+
   if (!args.skipDynamic) {
     const outcome = await runHarness({
-      projectRoot: args.projectRoot,
+      project,
       sourceFile,
       contractName,
       permissions,
+      ...(config.harness.constructorArgs ? { constructorArgs: config.harness.constructorArgs } : {}),
       maxFeeBips: config.declared.maxFeeBips ?? 0,
       timeoutMs: args.timeoutMs,
       log,
     });
     invariants = outcome.invariants;
+    harness = {
+      version: outcome.version,
+      status: outcome.status,
+      ...(outcome.reason ? { reason: outcome.reason } : {}),
+      durationMs: outcome.durationMs,
+    };
     if (outcome.status !== 'ok') {
       log(`harness: ${outcome.status} — ${outcome.reason ?? ''}`);
+    }
+    if (outcome.run) {
+      // What the harness actually deployed under. Recorded even when it agrees
+      // with the source declaration: this is the set the PoolManager obeyed.
+      permissionsSection.fromRuntime = permissionsFrom(outcome.run.flags);
+      permissionsSection.harnessRun = {
+        flags: outcome.run.flags,
+        permissionsDerived: outcome.run.permissionsDerived,
+        customCurve: outcome.run.customCurve,
+        dynamicFee: outcome.run.dynamicFee,
+        seeded: outcome.run.seeded,
+        ...(outcome.run.hookedSeedRevert ? { hookedSeedRevert: outcome.run.hookedSeedRevert } : {}),
+      };
     }
   }
 
@@ -317,19 +345,19 @@ async function commandScan(argv: string[]): Promise<number> {
       contractName,
       sourceFile,
       solcVersion: context.solcVersion,
+      artifactDir: relative(args.projectRoot, project.artifactDir) || '.',
+      projectConfigSource: project.configSource,
     },
-    ...(Object.keys(permissions).length > 0
-      ? { permissions: { fromSource: permissions } }
-      : {}),
+    ...(Object.keys(permissionsSection).length > 0 ? { permissions: permissionsSection } : {}),
     findings,
     invariants,
     score: scored,
     engineResults,
     engineMeta,
+    harness,
     corroboratedFindings: stats.corroborated,
     uncoveredFunctions,
     staticAnalysisSkipped: args.skipStatic,
-    dynamicAnalysisSkipped: args.skipDynamic,
     ...(args.noGate ? {} : { gate: config.gate }),
   });
 
@@ -411,6 +439,13 @@ function printSummary(
         (engine.reason ? `  ${dim}${engine.reason}${reset}` : '') +
         '\n',
     );
+  }
+
+  // The invariants are the harness's output; one line so a reader sees
+  // "I1 passed, I2 not-applicable" rather than inferring it from the engine row.
+  const invariants = (manifest.invariants ?? []) as Array<{ id: string; status: string }>;
+  if (invariants.length > 0) {
+    out.write(`  invariants  ${invariants.map((i) => `${i.id} ${i.status}`).join(', ')}\n`);
   }
 
   const uncovered = (coverage.uncoveredFunctions ?? []) as unknown[];
