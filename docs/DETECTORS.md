@@ -6,13 +6,17 @@ participates in scoring without being wired in twice.
 
 Detectors only run against contracts that actually implement `IHooks` callbacks.
 Without that scoping, a scan reports missing PoolManager checks on every ERC20 in
-`lib/`, and a tool that cries wolf on dependencies is one nobody runs twice.
+`lib/`, and a tool that cries wolf on dependencies is one nobody runs twice. The
+one exception is the [unsupported-ABI](#unsupported-abi) classification, which
+exists precisely for the contracts that scoping excludes.
 
 | Rule | Finds | Impact | Status |
 |---|---|---|---|
 | [HS-01](#hs-01) | Callback anyone can call | High | ✅ |
 | [HS-02](#hs-02) | Permissions vs implementation | High | ✅ |
 | [HS-07](#hs-07) | Custom accounting in use | Info | ✅ |
+| [disabled-callback](#disabled-callback) | Callback refused by design | Info | ✅ |
+| [unsupported-abi](#unsupported-abi) | Hook on an interface hookrisk cannot read | Info | ✅ |
 | [HS-03](#not-yet-implemented) | Admin surface | — | ✖ |
 | [HS-04](#not-yet-implemented) | Upgradeability | — | ✖ (covered by BlockSec) |
 | [HS-05](#not-yet-implemented) | External call in swap path | — | ✖ |
@@ -129,8 +133,45 @@ Resolving it also requires re-resolving virtual dispatch, because Slither's
 `internal_calls` point at the *base's* delegate even when the contract overrides
 it.
 
+### A revert is not always a stub
+
+Four of fourteen real hooks we scanned declare a liquidity permission and
+override the delegate with a revert of their own — `LiquidityNotAllowed()`,
+`AddLiquidityDirectToHook()`, `"No v4 Liquidity allowed"`,
+`"Use custom removeLiquidity"`. Same IR shape as the `HookNotImplemented()`
+stub, opposite meaning: the permission is declared *so that* the PoolManager
+routes there and is refused. Reporting that as "the pool is unusable" at High
+was wrong on four of fourteen hooks, in the direction that gets a tool switched
+off.
+
+So every callback is classified rather than tested with a boolean:
+
+| Verdict | Meaning | HS-02 |
+|---|---|---|
+| `IMPLEMENTED` | the delegate can return | reports if the permission is **not** declared |
+| `STUB` | not overridden, or the override reverts `HookNotImplemented()`, or it lives under a dependency path | reports at High if the permission **is** declared |
+| `INTENTIONALLY_DISABLED` | project-owned delegate, any other unconditional revert | silent — [disabled-callback](#disabled-callback) reports it |
+
+Both halves of the `INTENTIONALLY_DISABLED` rule matter. Hooks routinely vendor
+`BaseHook` into `src/base/` (WETHHook does), which makes the stub project-owned
+without making it intentional; the error's name is what separates the two.
+
+HS-02 also stays silent on a callback that exists only under a pre-current
+signature (see [unsupported-abi](#unsupported-abi)): an old signature is not a
+missing body, and the classification names it instead.
+
+### Discriminators
+
+Two HS-02 findings can anchor on the same contract — Orbital declares both
+`beforeAddLiquidity` and `beforeRemoveLiquidity` as refusals — and the CLI's
+de-duplication, which exists so two *engines* reporting one defect are counted
+once, collapsed them into one. Every finding now carries
+`hookrisk.discriminator`: the permission field for HS-02, the callback name for
+HS-01 and disabled-callback. Same class, same element, different discriminator
+means different finding.
+
 [`hook_analysis.py`](../detectors/slither_hookrisk/utils/hook_analysis.py) ·
-`is_effectually_implemented`, `resolve_override`
+`classify_callback`, `unconditional_revert`, `is_project_source`, `resolve_override`
 
 ---
 
@@ -154,6 +195,70 @@ consequences are traceable:
 
 The manifest marks these `isClassification: true`, and the gate ignores them —
 failing a build for a legitimate design choice would be indefensible.
+
+---
+
+<a id="disabled-callback"></a>
+## Callback intentionally disabled
+
+`hookrisk-disabled-callback` · rule class `callback-intentionally-disabled` · **classification, not a defect**
+
+The hook declares a permission and overrides the callback, in its own sources,
+with a revert of its own choosing. The PoolManager-routed operation is refused by
+design: the hook is the market maker and liquidity goes through its own deposit
+path. The finding names the callback, the error, and the operation
+("PoolManager-routed liquidity addition is disabled by design").
+
+Reported at INFO because there is nothing to fix. Two consumers act on it:
+
+- **The reader**, who sees *why* direct liquidity reverts instead of an
+  accusation or silence.
+- **The harness**, whose twin-pool setUp seeds both pools through the
+  PoolManager. A hook classified here rejects that seeding; the harness records
+  `seeded: "hooked-failed"` rather than treating the revert as a finding.
+
+Anchored on the developer's delegate, so it survives `--exclude-dependencies`
+and points at the line that refuses. Reported only when the permission is
+declared (or none are declared and the address bits decide): a refusal the
+PoolManager never routes to is unreachable code, which is HS-02's business.
+
+---
+
+<a id="unsupported-abi"></a>
+## Unsupported hook ABI
+
+`hookrisk-unsupported-abi` · rule class `unsupported-hook-abi` · **classification, not a defect**
+
+Five of fourteen real hooks we scanned are on the 2023 interface:
+`getHooksCalls()` returning `Hooks.Calls`, `beforeSwap` without `hookData`,
+`BaseHook` from v4-periphery. None of their callbacks match the shipped
+signatures, every other detector skips them, and the scan used to report zero
+findings — indistinguishable from a clean bill of health.
+
+This detector overrides the base class's scoping (which is what excludes those
+contracts) and fires on any deployable, non-dependency contract that:
+
+- defines `getHooksCalls()` — conclusive. `is_hook_contract` refuses such a
+  contract even when one callback still matches (`afterInitialize` has never
+  changed), because otherwise HS-02 reads its permissions wrong and accuses it
+  of "not declaring `getHookPermissions()`" at High. That is what happened on
+  v4-stoploss;
+- exposes external functions *named* like IHooks callbacks whose normalised
+  signatures are not the shipped ones;
+- inherits something called `BaseHook` without any recognised callback.
+
+The message says the detectors did not analyse the contract, lists the
+mismatched callbacks, and states that every code-derived dimension is
+unmeasured. A contract merely named `SomethingHook` that does none of the above
+is left alone — the name is not evidence.
+
+A recognised hook with *some* mismatched callbacks (v2-on-v4: current
+`beforeSwap`, `ModifyLiquidityParams` without `salt`) is analysed for what
+matches and gets a shorter finding, discriminator `partial`, naming the
+callbacks nothing could judge.
+
+[`hook_analysis.py`](../detectors/slither_hookrisk/utils/hook_analysis.py) ·
+`legacy_abi_evidence`, `is_hook_contract`
 
 ---
 
@@ -184,11 +289,13 @@ Slither logs `Impossible to generate IR for <function>` and **continues**, then
 reports a normal result count. Any detector relying on SlithIR never sees those
 functions.
 
-This is not hypothetical. Running over OpenZeppelin's `uniswap-hooks`, three
-functions fail to lift — including `AntiSandwichHook._afterSwap`, which is where
-the interesting logic lives. We hit it in our own false-positive gate: the
+This is not hypothetical. An earlier pin of OpenZeppelin's `uniswap-hooks` had
+three functions fail to lift — including `AntiSandwichHook._afterSwap`, which is
+where the interesting logic lives. We hit it in our own false-positive gate: the
 detectors returned zero findings, and it took reading stderr to establish that
-part of that silence was "nothing wrong" and part was "nothing looked."
+part of that silence was "nothing wrong" and part was "nothing looked." (The
+currently pinned commit lifts cleanly; the corpus gate would surface a
+regression as `HR-E205`.)
 
 hookrisk collects them and reports reduced coverage (`HR-E205`) in the manifest
 and in `HOOK_RISK.md`:
@@ -211,9 +318,26 @@ the vulnerability *class* it reproduces and links the public write-up. They are
 minimal reproductions of a class, not faithful reimplementations of any
 particular incident, and say so.
 
-**[`corpus/src/good/`](../corpus/src/good)** — must stay silent. Compiles
-OpenZeppelin's production `AntiSandwichHook` and `LiquidityPenaltyHook`, so every
-detector is run against externally reviewed code on every build.
+**[`corpus/src/good/`](../corpus/src/good)** — nothing at High or Medium.
+Subclasses OpenZeppelin's concrete `AntiSandwichMock`, `LimitOrderHookMock` and
+`LiquidityPenaltyHookMock` in project source, so every detector is run against
+externally reviewed code on every build *and the gate can see the result* —
+the abstract hooks it used to import were skipped as undeployable, and a
+finding anchored under `lib/` is dropped by `--exclude-dependencies` before it
+reaches the gate. Informational classifications are allowed here:
+`IntentionalRevertHook` is meant to trip disabled-callback, and AntiSandwich
+legitimately uses custom accounting.
+
+**[`corpus/src/legacy/`](../corpus/src/legacy)** — unsupported-ABI
+classifications and nothing else. A 2023-style hook, the v4-stoploss shape
+(`getHooksCalls()` plus the one callback whose signature never changed), the
+v2-on-v4 shape (current hook, one pre-`salt` callback), and a control named
+`HookRegistry` that must stay silent.
+
+The gates run on Slither's JSON (`--json -` and `jq`), never on the human log,
+and [`detectors/tests/test_corpus.py`](../detectors/tests/test_corpus.py) asserts
+the finding-level expectations each fixture's header promises: anchor element,
+discriminator, in-file controls.
 
 The negative gate matters more. Missing a real bug is bad; flagging correct code
 is what gets a security tool switched off, and after that it finds nothing at all.

@@ -16,17 +16,22 @@ from typing import Type
 from slither.detectors.abstract_detector import AbstractDetector
 from slither.printers.abstract_printer import AbstractPrinter
 
+from .detectors.disabled_callback import CallbackIntentionallyDisabled
 from .detectors.hs01_unprotected_callback import UnprotectedHookCallback
 from .detectors.hs02_flag_divergence import (
     CustomAccountingDeclared,
     FlagImplementationDivergence,
 )
+from .detectors.unsupported_abi import UnsupportedHookAbi
 
-#: Every detector, most severe class first.
+#: Every detector, most severe class first. The classifications come last;
+#: `UnsupportedHookAbi` is the only one that fires on contracts the others skip.
 DETECTORS: list[Type[AbstractDetector]] = [
     UnprotectedHookCallback,
     FlagImplementationDivergence,
     CustomAccountingDeclared,
+    CallbackIntentionallyDisabled,
+    UnsupportedHookAbi,
 ]
 
 PRINTERS: list[Type[AbstractPrinter]] = []
