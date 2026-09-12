@@ -52,7 +52,37 @@ export type RuleClass =
   /** Custom accounting is in use. A classification, not a defect. */
   | 'custom-accounting'
   /** Rounding that resolves in the caller's favour on an exit path. */
-  | 'rounding-direction';
+  | 'rounding-direction'
+  /**
+   * A callback is overridden with a deliberate revert: the PoolManager-routed
+   * operation is disabled by design. A classification, not a defect — it tells
+   * the reader why the harness could not, say, add liquidity through the pool.
+   */
+  | 'callback-intentionally-disabled'
+  /**
+   * The contract looks like a v4 hook but uses an ABI hookrisk cannot analyse
+   * (the 2023 `getHooksCalls()` / `Hooks.Calls` shape, for instance). A
+   * classification with a scoring consequence: every hookrisk-derived dimension
+   * for this target is unmeasured, because the detectors never looked.
+   */
+  | 'unsupported-hook-abi';
+
+/**
+ * Rule classes that classify rather than accuse.
+ *
+ * A classification is emitted at INFO and must never fail a severity gate or be
+ * counted as a defect; its job is to change how the rest of the report is read.
+ * Kept here, next to the taxonomy, so the gate, the scorer and the renderers
+ * agree on one list instead of each hardcoding `custom-accounting`.
+ */
+export const CLASSIFICATION_CLASSES: ReadonlySet<RuleClass> = new Set<RuleClass>([
+  'custom-accounting',
+  'callback-intentionally-disabled',
+  'unsupported-hook-abi',
+]);
+
+export const isClassification = (ruleClass: RuleClass): boolean =>
+  CLASSIFICATION_CLASSES.has(ruleClass);
 
 /** Which engine produced a finding, and what it called the rule natively. */
 export interface EngineAttribution {
@@ -96,6 +126,13 @@ export interface Finding {
   confidence: Confidence;
   location: SourceLocation | null;
   function?: FunctionRef;
+  /**
+   * What distinguishes this finding from others of the same class anchored on
+   * the same element: the permission field for HS-02, the callback name for
+   * HS-01. Without it, nine divergent permissions on one contract are one
+   * finding, because they all point at the contract's opening line.
+   */
+  discriminator?: string;
   /** Human-readable support: the guard that is missing, the flag that diverges. */
   evidence: string[];
   engines: EngineAttribution[];
@@ -121,6 +158,20 @@ export interface EngineResult {
   findings: Finding[];
   /** Wall-clock milliseconds. */
   durationMs: number;
+  /**
+   * Whether the engine actually examined the target, as opposed to merely
+   * running. `status: 'ok'` with zero findings reads as a clean bill of health;
+   * if the engine never recognised the target as a hook it is nothing of the
+   * kind, and every dimension that would have been scored from its silence must
+   * stay unmeasured. Absent means the engine makes no such claim.
+   */
+  targetCoverage?: { covered: boolean; reason?: string };
+  /**
+   * Findings the engine produced in files other than the target, dropped from
+   * `findings` so a neighbour's problems do not inflate this target's score.
+   * Listed so the manifest can say what was set aside rather than losing it.
+   */
+  unattributed?: Array<{ file: string; count: number }>;
 }
 
 /** What every engine receives. */

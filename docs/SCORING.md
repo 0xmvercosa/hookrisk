@@ -61,6 +61,42 @@ upgradeability  —  unmeasured
 
 [`derive.ts`](../cli/src/scoring/derive.ts)
 
+#### "Ran" is not "looked"
+
+An engine's `status: ok` says its process finished. It does not say the engine
+recognised the target. Five hooks written against the 2023 `getHooksCalls()`
+ABI were once scored `complexity: 0 — Pass-through only; no hook state` because
+Slither ran cleanly over contracts the detectors never identified as hooks.
+
+So an engine counts as having looked only when it ran **and** did not disclaim
+the target. Two things disclaim it:
+
+- an `unsupported-hook-abi` classification on the target file — the detectors
+  saying "this is hook-shaped and I cannot read it";
+- `targetCoverage.covered: false` on the engine result, which the Slither
+  adapter sets from the same classification and which any future engine can
+  set for its own reasons.
+
+Either way, every dimension that engine would have measured comes back
+unmeasured, with the reason in its evidence:
+
+```
+customMath  —  unmeasured
+   Not measured: custom-accounting requires hookrisk; hookrisk ran but did not
+   recognise the target's hook ABI (unsupported-hook-abi: ...)
+```
+
+#### Some dimensions cannot be measured by silence at all
+
+Complexity is the case today. HS-01 and HS-02 prove a hook has callbacks with
+non-trivial structure, so when either fires the dimension gets a **floor of 1**.
+When neither fires, nothing hookrisk runs can tell a genuinely pass-through hook
+from a complex one whose callbacks happen to be guarded and correctly declared —
+which is what every well-written hook looks like. Complexity is therefore
+`unmeasured` when the detectors are silent, never `measured: 0`, and the
+evidence says why: hookrisk has no complexity metric yet. Declare it in
+`hookrisk.toml` to score it.
+
 ### 3. Measured and declared are different claims
 
 `teamMaturity` is a self-assessment by definition. `upgradeability` is observable
@@ -79,7 +115,7 @@ rather than guess.
 
 | Dimension | Range | How hookrisk gets it |
 |---|---|---|
-| Complexity | 0–5 | Measured — floor from findings; no dedicated metric yet |
+| Complexity | 0–5 | Floor of 1 when HS-01/HS-02 fire; otherwise **unmeasured** — no dedicated metric yet, and silence is not 0 |
 | Custom math | 0–5 | Measured — from custom-accounting and rounding findings |
 | External dependencies | 0–3 | Needs HS-05 (not implemented) → unmeasured |
 | External liquidity exposure | 0–3 | Never measured → declared or unmeasured |

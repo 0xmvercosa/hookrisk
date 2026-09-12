@@ -6,9 +6,19 @@
  * each finding into the shared shape so it can be reconciled against other
  * engines.
  *
- * Two things this adapter does that a naive wrapper would not:
+ * Three things this adapter does that a naive wrapper would not:
  *
- * **It reads stderr for coverage gaps.** Slither logs
+ * **It writes the report to a file, not stdout.** `--json -` makes Slither
+ * capture *both* of its streams into a buffer it only flushes on a clean exit.
+ * A compile failure raises crytic-compile's `InvalidCompilation`, which is not
+ * a `SlitherException`, so the buffer is never flushed and the process exits
+ * with nothing on either stream — the observed "could not parse Slither output:"
+ * with nothing after the colon. The same capture swallowed every
+ * `Impossible to generate IR` line on a successful run, so the coverage
+ * reporting below never saw one from the CLI. With `--json <file>` Slither
+ * mirrors the streams instead of blocking them, and both problems go away.
+ *
+ * **It reads the streams for coverage gaps.** Slither logs
  * `Impossible to generate IR for <function>` and carries on, then reports a
  * normal result count. Any detector that relies on SlithIR never sees those
  * functions. We observed this on OpenZeppelin's own `AntiSandwichHook`, where
@@ -17,12 +27,17 @@
  * assurance, so uncovered functions are collected and surfaced in the manifest.
  *
  * **It treats a non-zero exit as normal.** Slither exits non-zero when it merely
- * *found* something. Only an empty or unparseable report is a failure.
+ * *found* something. Only a missing or unparseable report is a failure, and a
+ * failure always carries a reason: classified against the error catalogue when
+ * the output matches an entry, the last lines of output when it does not.
  */
 
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
+import { describeFailure } from '../errors.js';
 import type {
   Confidence,
   Engine,
@@ -32,7 +47,7 @@ import type {
   RuleClass,
   Severity,
 } from '../types.js';
-import { makeFindingId } from './dedupe.js';
+import { callbackSelector, makeFindingId } from './dedupe.js';
 
 /** Slither impact levels mapped onto our severity scale. */
 const SEVERITY_MAP: Record<string, Severity> = {
@@ -52,7 +67,7 @@ const CONFIDENCE_MAP: Record<string, Confidence> = {
 /** `ERROR:ContractSolcParsing:Impossible to generate IR for X.y (path#1-2):` */
 const UNCOVERED_RE = /Impossible to generate IR for ([\w.]+)\s*\(([^)]*)\)/g;
 
-interface SlitherElement {
+export interface SlitherElement {
   type: string;
   name: string;
   source_mapping?: {
@@ -64,7 +79,7 @@ interface SlitherElement {
   type_specific_fields?: Record<string, unknown>;
 }
 
-interface SlitherDetectorResult {
+export interface SlitherDetectorResult {
   check: string;
   impact: string;
   confidence: string;
@@ -76,6 +91,8 @@ interface SlitherDetectorResult {
     informsDimensions: string[];
     informsTriggers: string[];
     isClassification: boolean;
+    /** See `Finding.discriminator`. Optional: older detectors do not send one. */
+    discriminator?: string;
   };
 }
 
@@ -91,10 +108,20 @@ export interface UncoveredFunction {
   reason: string;
 }
 
+export interface ExecResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** How the engine runs a process. Injectable so the failure paths are testable without Slither. */
+export type ExecFn = (cmd: string, args: string[], timeoutMs: number, cwd?: string) => Promise<ExecResult>;
+
 export interface SlitherOptions {
   /** Path to the slither executable. Defaults to `slither` on PATH. */
   binary?: string;
   enabled?: boolean;
+  exec?: ExecFn;
 }
 
 export class SlitherEngine implements Engine {
@@ -106,10 +133,12 @@ export class SlitherEngine implements Engine {
 
   private readonly binary: string;
   private readonly enabled: boolean;
+  private readonly exec: ExecFn;
 
   constructor(opts: SlitherOptions = {}) {
     this.binary = opts.binary ?? process.env.HOOKRISK_SLITHER_BIN ?? 'slither';
     this.enabled = opts.enabled ?? true;
+    this.exec = opts.exec ?? exec;
   }
 
   async probe(): Promise<{ available: boolean; version: string; reason?: string }> {
@@ -117,7 +146,7 @@ export class SlitherEngine implements Engine {
       return { available: false, version: 'n/a', reason: 'disabled in configuration' };
     }
 
-    const version = await exec(this.binary, ['--version'], 30_000).catch(() => null);
+    const version = await this.exec(this.binary, ['--version'], 30_000).catch(() => null);
     if (!version || version.code !== 0) {
       return {
         available: false,
@@ -129,7 +158,7 @@ export class SlitherEngine implements Engine {
     // Registration is separate from installation: the plugin can be on disk in a
     // different environment than the one running Slither, in which case the
     // detectors exist and are invisible.
-    const detectors = await exec(this.binary, ['--list-detectors'], 60_000).catch(() => null);
+    const detectors = await this.exec(this.binary, ['--list-detectors'], 60_000).catch(() => null);
     if (!detectors || !/hookrisk-/.test(detectors.stdout)) {
       return {
         available: false,
@@ -161,77 +190,96 @@ export class SlitherEngine implements Engine {
     const projectRoot = resolve(ctx.projectRoot);
     ctx.log(`hookrisk: slither ${ctx.sourceFile}:${ctx.contractName}`);
 
-    const proc = await exec(
-      this.binary,
-      ['.', '--exclude-dependencies', '--json', '-'],
-      ctx.timeoutMs,
-      projectRoot,
-    ).catch((err: Error) => ({ code: -1, stdout: '', stderr: err.message }));
-
-    // Slither writes progress and IR-lifting failures to stderr regardless of
-    // outcome, so parse it before deciding whether the run succeeded.
-    this.uncoveredFunctions = collectUncovered(proc.stderr);
-    if (this.uncoveredFunctions.length > 0) {
-      ctx.log(
-        `hookrisk: ${this.uncoveredFunctions.length} function(s) could not be lifted to IR ` +
-          'and were not analysed (HR-E205)',
-      );
-    }
-
-    let report: SlitherReport;
-    try {
-      report = JSON.parse(proc.stdout) as SlitherReport;
-    } catch {
-      return {
-        engine: this.id,
-        version: probe.version,
-        status: 'failed',
-        reason: `could not parse Slither output: ${lastLines(proc.stderr, 3)}`,
-        findings: [],
-        durationMs: Date.now() - started,
-      };
-    }
-
-    if (report.success === false) {
-      return {
-        engine: this.id,
-        version: probe.version,
-        status: 'failed',
-        reason: report.error ?? 'Slither reported failure',
-        findings: [],
-        durationMs: Date.now() - started,
-      };
-    }
-
-    const all = (report.results?.detectors ?? [])
-      .filter((r) => r.check.startsWith('hookrisk-'))
-      .map((r) => normalise(r))
-      .filter((f): f is Finding => f !== null);
-
-    // Slither has to compile the whole project — imports and inheritance make
-    // anything narrower unreliable — but a scan of `src/MyHook.sol:MyHook` must
-    // report on that hook, not on every other contract in the repository.
-    // Reporting a neighbour's problems against this target would inflate its
-    // score with findings its author cannot act on, and the score is the point.
-    const findings = all.filter((f) => !f.location || f.location.file === ctx.sourceFile);
-    const elsewhere = all.length - findings.length;
-    if (elsewhere > 0) {
-      ctx.log(`hookrisk: ${elsewhere} finding(s) in other files, not attributed to this target`);
-    }
-
-    ctx.log(`hookrisk: ${findings.length} finding(s)`);
-    return {
+    const failed = (reason: string): EngineResult => ({
       engine: this.id,
       version: probe.version,
-      status: 'ok',
-      findings,
+      status: 'failed',
+      reason,
+      findings: [],
       durationMs: Date.now() - started,
-    };
+    });
+
+    // The report goes to a scratch file rather than stdout: see the module
+    // comment for why `--json -` loses every diagnostic on the paths that matter.
+    const scratch = mkdtempSync(join(tmpdir(), 'hookrisk-slither-'));
+    const reportPath = join(scratch, 'report.json');
+    try {
+      const proc = await this.exec(
+        this.binary,
+        ['.', '--exclude-dependencies', '--json', reportPath],
+        ctx.timeoutMs,
+        projectRoot,
+      ).catch((err: Error) => ({ code: -1, stdout: '', stderr: err.message }));
+
+      // Which stream a message lands on depends on how Slither was asked to
+      // report (its logger goes to stdout unless JSON is on stdout), so both are
+      // read together and neither is trusted to be the "diagnostic" one.
+      const output = `${proc.stdout}\n${proc.stderr}`;
+      this.uncoveredFunctions = collectUncovered(output);
+      if (this.uncoveredFunctions.length > 0) {
+        ctx.log(
+          `hookrisk: ${this.uncoveredFunctions.length} function(s) could not be lifted to IR ` +
+            'and were not analysed (HR-E205)',
+        );
+      }
+
+      let report: SlitherReport;
+      try {
+        report = JSON.parse(readFileSync(reportPath, 'utf8')) as SlitherReport;
+      } catch {
+        const reason = describeSlitherFailure(output, proc.code);
+        ctx.log(`hookrisk: failed — ${reason}`);
+        return failed(reason);
+      }
+
+      if (report.success === false) {
+        const reason = describeSlitherFailure(`${report.error ?? ''}\n${output}`, proc.code);
+        ctx.log(`hookrisk: failed — ${reason}`);
+        return failed(reason);
+      }
+
+      const all = (report.results?.detectors ?? [])
+        .filter((r) => r.check.startsWith('hookrisk-'))
+        .map((r) => normalise(r))
+        .filter((f): f is Finding => f !== null);
+
+      // Slither has to compile the whole project — imports and inheritance make
+      // anything narrower unreliable — but a scan of `src/MyHook.sol:MyHook` must
+      // report on that hook, not on every other contract in the repository.
+      // Reporting a neighbour's problems against this target would inflate its
+      // score with findings its author cannot act on, and the score is the point.
+      const { findings, unattributed } = partitionByTarget(all, ctx.sourceFile);
+      if (unattributed.length > 0) {
+        const elsewhere = unattributed.reduce((n, u) => n + u.count, 0);
+        ctx.log(
+          `hookrisk: ${elsewhere} finding(s) in other files, not attributed to this target: ` +
+            unattributed.map((u) => `${u.file} (${u.count})`).join(', '),
+        );
+      }
+
+      const targetCoverage = coverageOf(findings, ctx.contractName);
+      if (!targetCoverage.covered) {
+        ctx.log(`hookrisk: did not analyse the target — ${targetCoverage.reason}`);
+      }
+
+      ctx.log(`hookrisk: ${findings.length} finding(s)`);
+      return {
+        engine: this.id,
+        version: probe.version,
+        status: 'ok',
+        findings,
+        durationMs: Date.now() - started,
+        targetCoverage,
+        ...(unattributed.length > 0 ? { unattributed } : {}),
+      };
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }
 }
 
 /** Translate one Slither detector result into hookrisk's shape. */
-function normalise(result: SlitherDetectorResult): Finding | null {
+export function normalise(result: SlitherDetectorResult): Finding | null {
   const meta = result.hookrisk;
   if (!meta) {
     // A hookrisk-prefixed check with no metadata means a detector forgot to use
@@ -263,15 +311,28 @@ function normalise(result: SlitherDetectorResult): Finding | null {
   const description = result.description.trim();
   const title = firstSentence(description);
 
+  // A callback's selector is attached when the name resolves to one, so the id
+  // and group key of an HS-01 here match the same defect seen by an engine
+  // that only knows selectors.
+  const fn =
+    element?.type === 'function'
+      ? { name: element.name, ...(callbackSelector(element.name) ? { selector: callbackSelector(element.name) } : {}) }
+      : undefined;
+  const discriminator =
+    typeof meta.discriminator === 'string' && meta.discriminator.length > 0
+      ? meta.discriminator
+      : undefined;
+
   return {
-    id: makeFindingId(meta.ruleClass, location, undefined),
+    id: makeFindingId(meta.ruleClass, location, fn?.selector, discriminator),
     ruleClass: meta.ruleClass,
     title,
     description,
     severity,
     confidence,
     location,
-    function: element?.type === 'function' ? { name: element.name } : undefined,
+    ...(fn ? { function: fn } : {}),
+    ...(discriminator ? { discriminator } : {}),
     evidence: [description],
     engines: [
       {
@@ -287,17 +348,71 @@ function normalise(result: SlitherDetectorResult): Finding | null {
 }
 
 /**
+ * Split findings into those on the target file and those elsewhere, the latter
+ * counted per file so the report can say what was set aside. A finding with no
+ * location cannot be placed and is kept: dropping it would hide a detector's
+ * output on the strength of a missing source mapping.
+ */
+export function partitionByTarget(
+  all: Finding[],
+  sourceFile: string,
+): { findings: Finding[]; unattributed: Array<{ file: string; count: number }> } {
+  const findings: Finding[] = [];
+  const counts = new Map<string, number>();
+  for (const f of all) {
+    if (!f.location || f.location.file === sourceFile) findings.push(f);
+    else counts.set(f.location.file, (counts.get(f.location.file) ?? 0) + 1);
+  }
+  const unattributed = [...counts]
+    .map(([file, count]) => ({ file, count }))
+    .sort((a, b) => b.count - a.count || a.file.localeCompare(b.file));
+  return { findings, unattributed };
+}
+
+/**
+ * Whether hookrisk's detectors actually examined the target.
+ *
+ * An `unsupported-hook-abi` classification is the detectors saying "this is
+ * hook-shaped and I could not read it". Every other finding — or none — on such
+ * a target is silence from code that never looked, and the scorer must not
+ * turn that silence into zeros.
+ */
+export function coverageOf(
+  findings: Finding[],
+  contractName: string,
+): { covered: boolean; reason?: string } {
+  const unsupported = findings.find((f) => f.ruleClass === 'unsupported-hook-abi');
+  if (unsupported) {
+    return { covered: false, reason: `${contractName} uses a hook ABI hookrisk cannot analyse: ${unsupported.title}` };
+  }
+  return { covered: true };
+}
+
+/**
+ * Reason for a run that produced no readable report. Never empty: an engine
+ * row that says "failed" with no reason is indistinguishable from a bug in the
+ * adapter, and the user's next step depends on which it was.
+ */
+export function describeSlitherFailure(output: string, exitCode: number): string {
+  return describeFailure(
+    output,
+    `Slither exited with code ${exitCode} and wrote nothing to stdout, stderr or its report ` +
+      '(HR-E901); run `slither . --exclude-dependencies` in the project to see why',
+  );
+}
+
+/**
  * Collect functions Slither could not lift to IR.
  *
  * These are the silent gaps. Slither logs them and continues; without this the
  * manifest would say "0 findings" for a contract whose most interesting function
  * was never examined.
  */
-export function collectUncovered(stderr: string): UncoveredFunction[] {
+export function collectUncovered(output: string): UncoveredFunction[] {
   const out: UncoveredFunction[] = [];
   const seen = new Set<string>();
 
-  for (const match of stderr.matchAll(UNCOVERED_RE)) {
+  for (const match of output.matchAll(UNCOVERED_RE)) {
     const qualified = match[1]!;
     const location = match[2] ?? '';
     if (seen.has(qualified)) continue;
@@ -320,14 +435,6 @@ function firstSentence(text: string): string {
   return sentence.length > 160 ? `${sentence.slice(0, 157)}...` : sentence;
 }
 
-const lastLines = (s: string, n: number): string => s.trim().split('\n').slice(-n).join(' | ');
-
-interface ExecResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-}
-
 /** Run a command with a hard timeout. Never uses a shell. */
 function exec(cmd: string, args: string[], timeoutMs: number, cwd?: string): Promise<ExecResult> {
   return new Promise((resolvePromise, reject) => {
@@ -340,7 +447,7 @@ function exec(cmd: string, args: string[], timeoutMs: number, cwd?: string): Pro
       if (settled) return;
       settled = true;
       child.kill('SIGKILL');
-      reject(new Error(`\`${cmd}\` exceeded ${Math.round(timeoutMs / 1000)}s`));
+      reject(new Error(`\`${cmd}\` timed out after ${Math.round(timeoutMs / 1000)}s`));
     }, timeoutMs);
 
     child.stdout.on('data', (d) => (stdout += d.toString()));
