@@ -140,6 +140,15 @@ contract TrappingHookIsCaught is ValidationBase {
             handler.swapExactIn(1e13, i % 2 == 0);
         }
 
+        // A mid-sequence exit attempt must be recorded too, and survive the
+        // state rollback that keeps the twins aligned. Before the fix the
+        // write happened before `revertToState` and was undone with it, so
+        // only the sweep ever noticed.
+        handler.removeLiquidity(1); // index 1: the re-entered position; 0 is the one already closed
+        assertTrue(handler.exitReverted(), "mid-sequence exit failure must be recorded");
+        assertEq(handler.exitFailures(), 1, "one failed exit so far");
+        assertEq(handler.openPositionCount(), 1, "the position must still be open: the rollback kept the twins aligned");
+
         uint256 failures = handler.sweepExits();
 
         assertGt(failures, 0, "I3 failed to detect that liquidity is trapped");
@@ -437,6 +446,95 @@ contract InheritedPermissionsHookStandsUp is ValidationBase {
             );
         }
         assertEq(PERMISSIONS_SCRATCH.code.length, 0, "the scratch address must be cleared even on failure");
+    }
+}
+
+// --------------------------------------------------------------------------- //
+// Observation log — what a sequence actually exercised, for the CLI to weigh
+// --------------------------------------------------------------------------- //
+
+/// @notice An invariant that held over a sequence in which nothing happened
+/// has held vacuously. The handler's counters are the only evidence of what
+/// happened, and `afterInvariant` appends them as one JSON line per sequence.
+/// These tests pin the line's exact content on a busy sequence and on the
+/// idle-pool shape that used to read as three passes.
+contract ObservationLogIsWritten is ValidationBase {
+    function setUp() public {
+        _stand("FeeHooks.sol:HonestFeeHook", uint160(Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG));
+    }
+
+    /// @dev Three landed swaps, one position opened and closed, one donation.
+    function _busySequence() internal {
+        for (uint256 i = 0; i < 3; i++) {
+            handler.swapExactIn(1e14 + i * 1e13, i % 2 == 0);
+        }
+        handler.addLiquidity(1e17, 12345);
+        handler.removeLiquidity(0);
+        handler.donate(1e12, 1e12);
+        assertEq(handler.sweepExits(), 0, "nothing should be left to sweep");
+    }
+
+    function test_observationJsonCountsWhatLanded() public {
+        _busySequence();
+        assertEq(
+            handler.observationJson(),
+            '{"swapsExecuted":3,"swapsCompared":3,"swapsSkipped":0,"hookedSwapReverted":false,"positionsOpened":1,'
+            '"positionsClosed":1,"donations":1,"priceChecks":3,"monotonicityViolations":0,"exitFailures":0}'
+        );
+        assertEq(handler.swapsAttempted(), 3, "every attempt landed on this hook");
+    }
+
+    /// @notice Each call appends one line and its newline in a single write,
+    /// so two sequences yield two intact objects separated by padding.
+    function test_linesAreAppendedPerSequence() public {
+        string memory path = "out/hookrisk-obs-validation-log.jsonl";
+        if (vm.exists(path)) vm.removeFile(path);
+
+        _busySequence();
+        string memory json = handler.observationJson();
+        _writeObservationLine("validation-log", json);
+        _writeObservationLine("validation-log", json);
+
+        assertEq(vm.readFile(path), string.concat(json, "\n\n", json, "\n\n"));
+        vm.removeFile(path);
+    }
+
+    function test_nothingIsWrittenWithoutARunId() public {
+        _writeObservationLine("", handler.observationJson());
+        assertFalse(vm.exists("out/hookrisk-obs-.jsonl"), "no file may be written for an empty run id");
+    }
+}
+
+/// @notice The shape that motivated the log: a custom-curve hook that refuses
+/// PoolManager liquidity and, with no reserves of its own, reverts every swap.
+/// Every invariant "holds" over such a sequence because nothing was exercised,
+/// and the line must say exactly that — zeros everywhere that matters.
+contract IdlePoolIsObservedAsIdle is ValidationBase {
+    function setUp() public {
+        _stand(
+            "ShapeHooks.sol:LineCurveHook",
+            uint160(Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG)
+        );
+        // Deliberately no `_fund(address(hook), …)`: the fixture in
+        // LineCurveHookStandsUp supplies reserves so the swap path can be
+        // exercised; this one models the CLI's generic run, which cannot.
+    }
+
+    function test_idleSequenceLeavesEveryCounterAtZero() public {
+        assertFalse(run.hookedSeeded, "the hook refuses PoolManager liquidity");
+        for (uint256 i = 0; i < 4; i++) {
+            handler.swapExactIn(1e14, i % 2 == 0);
+        }
+        handler.addLiquidity(1e17, 12345);
+        handler.sweepExits();
+
+        assertEq(handler.swapsAttempted(), 4, "the fuzzer did try");
+        assertTrue(handler.hookedSwapReverted(), "the hook has no reserves, so every hooked swap reverts");
+        assertEq(
+            handler.observationJson(),
+            '{"swapsExecuted":0,"swapsCompared":0,"swapsSkipped":0,"hookedSwapReverted":true,"positionsOpened":0,'
+            '"positionsClosed":0,"donations":0,"priceChecks":0,"monotonicityViolations":0,"exitFailures":0}'
+        );
     }
 }
 

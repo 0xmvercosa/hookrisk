@@ -30,7 +30,9 @@ import {TwinHandler} from "./TwinHandler.sol";
 ///   HOOKRISK_CUSTOM_CURVE      1 when the hook holds beforeSwapReturnDelta;
 ///                              overridden when the flags were derived
 ///   HOOKRISK_RUN_ID            opaque token; `out/hookrisk-run-<id>.json` is
-///                              written at the end of setUp with what was decided
+///                              written at the end of setUp with what was decided,
+///                              and `out/hookrisk-obs-<id>.jsonl` receives one
+///                              line of handler counters per completed sequence
 ///
 /// ## Why a custom curve changes the invariants
 ///
@@ -170,6 +172,10 @@ contract GenericHookInvariants is TwinPools {
     function afterInvariant() public {
         if (!configured) return;
         uint256 failures = handler.sweepExits();
+        // Recorded before the assertions so that a sequence which ends in a
+        // trapped exit still leaves its counters behind: the CLI needs them
+        // to say how much was exercised, whether or not the invariant held.
+        _writeObservationLine(vm.envOr("HOOKRISK_RUN_ID", string("")), handler.observationJson());
         assertEq(failures, 0, "I3: liquidity could not be withdrawn after the sequence");
         assertEq(handler.openPositionCount(), 0, "I3: positions remain open after sweep");
     }

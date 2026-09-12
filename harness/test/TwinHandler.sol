@@ -80,11 +80,23 @@ contract TwinHandler is CommonBase, StdCheats, StdUtils {
 
     Position[] public positions;
 
+    /// @dev Mirrored swaps the fuzzer asked for, whatever became of them.
+    uint256 public swapsAttempted;
+    /// @dev Swaps that landed on *both* pools. Attempts the vanilla pool
+    /// refused, or the hook reverted, are rolled back and do not count: a
+    /// sequence in which nothing landed has exercised nothing, and the
+    /// observation log exists so the CLI can tell that apart from a pass.
     uint256 public swapsExecuted;
     uint256 public swapsCompared;
     uint256 public swapsSkipped;
     uint256 public liquidityAdds;
     uint256 public liquidityRemoves;
+    /// @dev Positions closed on both pools, by a fuzz action or by the sweep.
+    /// `liquidityRemoves` counts only the former.
+    uint256 public positionsClosed;
+    /// @dev Withdrawals that worked without the hook and failed with it,
+    /// mid-sequence or in the sweep. `exitReverted` is the boolean form.
+    uint256 public exitFailures;
 
     /// @dev Worst shortfall of hooked output against vanilla output, in bips.
     /// Invariant I2 reads this.
@@ -221,21 +233,25 @@ contract TwinHandler is CommonBase, StdCheats, StdUtils {
         bool vanillaOk = _tryModify(vanillaKey, params);
         bool hookedOk = _tryModify(hookedKey, params);
 
-        if (vanillaOk && !hookedOk) {
-            // Withdrawal works without the hook and fails with it. This is the
-            // finding I3 exists for, so it is recorded before rolling back.
-            exitReverted = true;
-            exitRevertRaw = _lastRevert;
-            exitRevertData = _rootCause(_lastRevert);
-        }
-
         if (!vanillaOk || !hookedOk) {
+            bytes memory reason = _lastRevert;
             vm.revertToState(snap);
+            if (vanillaOk && !hookedOk) {
+                // Withdrawal works without the hook and fails with it. This is
+                // the finding I3 exists for. Recorded after the rollback, not
+                // before: `revertToState` would undo the write along with the
+                // pool state (see `_mirroredSwap`).
+                exitReverted = true;
+                exitFailures += 1;
+                exitRevertRaw = reason;
+                exitRevertData = _rootCause(reason);
+            }
             return;
         }
 
         position.open = false;
         liquidityRemoves += 1;
+        positionsClosed += 1;
     }
 
     /// @notice Donate to both pools.
@@ -286,9 +302,11 @@ contract TwinHandler is CommonBase, StdCheats, StdUtils {
 
             if (_tryModify(hookedKey, params)) {
                 position.open = false;
+                positionsClosed += 1;
             } else {
                 failures += 1;
                 exitReverted = true;
+                exitFailures += 1;
                 exitRevertRaw = _lastRevert;
                 exitRevertData = _rootCause(_lastRevert);
             }
@@ -305,13 +323,50 @@ contract TwinHandler is CommonBase, StdCheats, StdUtils {
         return positions.length;
     }
 
+    /// @notice This sequence's counters as one JSON object, for the
+    /// observation log (`out/hookrisk-obs-<RUN_ID>.jsonl`).
+    ///
+    /// The invariants read these counters to decide whether they have
+    /// anything to assert; the CLI reads them to decide whether a pass meant
+    /// anything. An invariant that "held" over a sequence in which no swap
+    /// landed and no position was opened has held vacuously, and the only way
+    /// for the CLI to know is to be told what the handler actually did. Built
+    /// by hand so the field set — the contract with cli/src/harness.ts — is
+    /// visible here. `positionsOpened` is `liquidityAdds` under the name the
+    /// CLI uses.
+    function observationJson() external view returns (string memory) {
+        return string.concat(
+            '{"swapsExecuted":',
+            vm.toString(swapsExecuted),
+            ',"swapsCompared":',
+            vm.toString(swapsCompared),
+            ',"swapsSkipped":',
+            vm.toString(swapsSkipped),
+            ',"hookedSwapReverted":',
+            hookedSwapReverted ? "true" : "false",
+            ',"positionsOpened":',
+            vm.toString(liquidityAdds),
+            ',"positionsClosed":',
+            vm.toString(positionsClosed),
+            ',"donations":',
+            vm.toString(donations),
+            ',"priceChecks":',
+            vm.toString(priceChecks),
+            ',"monotonicityViolations":',
+            vm.toString(monotonicityViolations),
+            ',"exitFailures":',
+            vm.toString(exitFailures),
+            "}"
+        );
+    }
+
     // --- internals -----------------------------------------------------------
 
     /// @dev Revert data from the most recent failed router call.
     bytes internal _lastRevert;
 
     function _mirroredSwap(bool zeroForOne, int256 amountSpecified, uint256 notional) internal {
-        swapsExecuted += 1;
+        swapsAttempted += 1;
 
         uint256 snap = vm.snapshotState();
 
@@ -327,12 +382,20 @@ contract TwinHandler is CommonBase, StdCheats, StdUtils {
         uint160 priceBefore = _hookedSqrtPrice();
         (bool hookedOk, uint256 hookedOut) = _trySwap(hookedKey, zeroForOne, amountSpecified);
         if (!hookedOk) {
-            hookedSwapReverted = true;
-            hookedSwapRevertData = _lastRevert;
+            // Record *after* rolling back. `revertToState` restores every
+            // account, this handler's storage included, so anything written
+            // before it is silently undone — which is how the hooked-only
+            // swap revert went unrecorded and I2's "hook does not block
+            // swaps" could never fire. The reason is copied to memory first
+            // for the same rollback to leave it alone.
+            bytes memory reason = _lastRevert;
             vm.revertToState(snap);
+            hookedSwapReverted = true;
+            hookedSwapRevertData = reason;
             return;
         }
         _checkMonotonicity(priceBefore, _hookedSqrtPrice(), zeroForOne);
+        swapsExecuted += 1;
 
         cumulativeVanillaOut += vanillaOut;
         cumulativeHookedOut += hookedOut;

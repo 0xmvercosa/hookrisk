@@ -98,7 +98,8 @@ deliberate defects, and CI asserts the invariants are **violated** on them:
 | Hook | Defect | Caught by |
 |---|---|---|
 | `SkimmingFeeHook` | Charges 350 bips, documents 100 | I2, including the magnitude to ±50 bips |
-| `TrappingHook` | Blocks withdrawal after 8 swaps | I3, with the hook's own revert selector |
+| `TrappingHook` | Blocks withdrawal after 8 swaps | I3, with the hook's own revert selector, mid-sequence and in the sweep |
+| `LineCurveHook` without reserves | Every hooked swap reverts, no position can open | the observation log: every counter zero, `hookedSwapReverted` true |
 
 These run as deterministic tests, not fuzzed ones, in
 [`HarnessValidation.t.sol`](../harness/test/HarnessValidation.t.sol). An
@@ -219,7 +220,11 @@ layer that had not run, reporting exactly what a clean hook reports. Now:
 
 - the harness records `seeded = "hooked-failed"` and the wrapped revert;
 - a custom-curve hook is assessed normally, since it prices trades without
-  v4 liquidity;
+  v4 liquidity — *if it has reserves*. The harness cannot drive a hook's own
+  liquidity path, so a custom curve that keeps its reserves behind its own
+  `addLiquidity` (Orbital, constant-sum) has none, and every hooked swap
+  reverts. Its invariants then hold over nothing, and the observation log
+  below is what stops that from being reported as three passes;
 - a hook **without** a custom curve cannot trade in that state, so I2 and I3
   are `not-applicable` with the reason, and I1 is still reported;
 - any other `setUp` failure is a harness **failure** (`HR-E304`): the engine
@@ -231,6 +236,63 @@ layer that had not run, reporting exactly what a clean hook reports. Now:
 `coverage.dynamicAnalysisSkipped` is true in every one of these cases where no
 invariant was measured, not only under `--skip-dynamic`; `coverage.harnessStatus`
 says which.
+
+#### The static layer sees the same fact
+
+`hookrisk-disabled-callback` classifies a liquidity callback that is overridden
+with a deliberate revert (`callback-intentionally-disabled`, INFO). The
+harness's `seeded: "hooked-failed"` is that revert, observed. The CLI's
+`reconcileLayers()` (`cli/src/reconcile.ts`) joins them:
+
+- classification on `beforeAddLiquidity` **and** `hooked-failed`: one finding,
+  two engine attributions (`hookrisk` / `hookrisk-disabled-callback` and
+  `harness` / `seed-reverted`), confidence `high`, evidence naming the revert;
+- `hooked-failed` with no classification: a harness-sourced
+  `callback-intentionally-disabled` at `medium` confidence — execution proves
+  the refusal, not the intent;
+- when both agree, **I3 is `not-applicable`** with a detail naming the revert:
+  no position can exist on the hooked pool, so exit liveness has nothing to
+  assert. A *failed* I3 is never overwritten.
+
+### A pass over nothing is not a pass
+
+Every invariant is a statement about the state after a sequence. If the
+sequence landed no swap and opened no position, the statement held over
+nothing. Before the observation log existed, a custom-curve hook that rejects
+PoolManager liquidity and has no reserves reported `I1 passed, I2 passed, I3
+passed` after 256 sequences in which every hooked swap reverted and every
+liquidity add was rolled back — byte for byte the report of a hook the harness
+had actually exercised.
+
+`afterInvariant` now appends the handler's counters for the sequence to
+`harness/out/hookrisk-obs-<RUN_ID>.jsonl`, and the CLI sums them. A `passed`
+row whose relevant count is zero becomes `inconclusive`, with the counts in
+its detail:
+
+| Invariant | Relevant count | Detail starts with |
+|---|---|---|
+| I1 | `swapsExecuted + positionsOpened` | `passed vacuously: 0 swaps landed and 0 positions opened across N sequences` |
+| I2 (output comparison) | `swapsCompared` | `passed vacuously: 0 swaps compared …` |
+| I2b (custom curve) | `priceChecks` | `passed vacuously: 0 price checks …` |
+| I3 | `positionsOpened` | `passed vacuously: 0 positions opened …` |
+
+`swapsExecuted` counts swaps that landed on **both** pools; an attempt the
+vanilla pool refused or the hook reverted is rolled back and does not count
+(`swapsAttempted` does, and is not in the log). When the seed was rejected or
+hooked-only swap reverts were seen, the detail says so, because that is
+usually why the pool was idle. A `failed` row is never touched: a failure is
+evidence whatever the counters say.
+
+The summed counters are exposed for the manifest (`coverage.observations`)
+so a reader can see how hard the harness actually looked, alongside `runs`
+and `calls`.
+
+The handler's own recording had a defect the log's first test exposed:
+`hookedSwapReverted` and the mid-sequence `exitReverted` were written *before*
+`vm.revertToState`, which restores the handler's storage along with the
+pools', so both were silently undone and `invariant_I2_hookDoesNotBlockSwaps`
+could never fire. They are now recorded after the rollback;
+`TrappingHookIsCaught` and `IdlePoolIsObservedAsIdle` pin it.
 
 ## The contract between the CLI and the harness
 
@@ -247,7 +309,7 @@ GenericHookInvariants`:
 | `HOOKRISK_CONSTRUCTOR_ARGS` | hex ABI-encoded constructor arguments with the placeholders above; empty means the legacy behaviour (`abi.encode(manager)` for a one-argument constructor, nothing for zero) |
 | `HOOKRISK_MAX_FEE_BIPS` | the declared fee bound from `hookrisk.toml` |
 | `HOOKRISK_CUSTOM_CURVE` | `1` when the source declares `beforeSwapReturnDelta`; overridden by the harness when it derived the flags itself |
-| `HOOKRISK_RUN_ID` | opaque token naming the run record |
+| `HOOKRISK_RUN_ID` | opaque token naming the run record and the observation log |
 
 At the **end** of a successful `setUp` the harness writes
 `harness/out/hookrisk-run-<RUN_ID>.json`:
@@ -263,6 +325,40 @@ record, deletes it, and copies it into the manifest under
 `permissions.harnessRun`. Its absence after a run whose permissions were to be
 derived is itself a failure: the invariants would otherwise be vouching for a
 configuration nobody can see.
+
+After **every completed sequence**, `afterInvariant` appends one line to
+`harness/out/hookrisk-obs-<RUN_ID>.jsonl`:
+
+```json
+{"swapsExecuted":3,"swapsCompared":3,"swapsSkipped":0,"hookedSwapReverted":false,
+ "positionsOpened":1,"positionsClosed":1,"donations":1,"priceChecks":3,
+ "monotonicityViolations":0,"exitFailures":0}
+```
+
+Forge runs each `invariant_*` function's sequences separately and in
+parallel, so the log holds roughly `runs × invariant functions` lines (1285
+for the `scan` profile's five functions) and is appended to from several
+threads at once. Each object is written with its own trailing newline in a
+single write, so objects cannot interleave; forge's `writeLine` adds a second
+newline, and the blank lines are padding the reader skips. The CLI reads and
+deletes the log, sums it, and refuses a line it cannot parse. A run record
+without a log is a **failure**: `setUp` finished and forge reported rows, yet
+nothing says what the sequences exercised.
+
+### Concurrent scans
+
+Two scans at once share `harness/out` and `harness/cache`. This was tested
+rather than assumed: two `forge test --match-contract GenericHookInvariants`
+processes were started simultaneously in one harness checkout with different
+run ids and different hooks (the corpus `CleanHook` and the harness
+`HonestFeeHook`), once on a built project and once after `rm -rf out cache`
+so both compiled at the same time. Both runs exited 0 with all five invariant
+rows, both run records were correct, both observation logs held 1285 intact
+lines and no malformed one, and the artifacts (`out/IHooks.sol/IHooks.json`,
+which the CLI's dedupe layer reads) were intact afterwards. The per-run files
+are keyed by a random id, so nothing is shared by name. No lock is taken;
+if a future forge release changes how artifacts are written, a lock file in
+`harness/out` with a bounded wait in `runHarness` is the place to add one.
 
 The artifact directory and the compiler version come from `forge config --json`
 in the target project (`out` and `solc`; when `solc` is unset, from the
