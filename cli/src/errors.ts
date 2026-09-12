@@ -132,6 +132,67 @@ export function classify(text: string): ErrorSpec | null {
   return null;
 }
 
+/**
+ * One-line diagnosis of raw tool output, for an engine's `reason` field.
+ *
+ * `HR-E203 Target compiles under forge but not under Slither: Error (7920):
+ * Identifier not found or not unique. --> src/RefHook.sol:144:59` is something
+ * a user can act on. The empty string after a colon, which is what the Slither
+ * adapter used to produce, is not. So the contract here is: never empty. A
+ * catalogue match gives the code and title; the most informative line of output
+ * follows; with no match the last three non-empty lines stand in; with no output
+ * at all the caller's `fallback` does.
+ */
+export function describeFailure(output: string, fallback = 'the tool produced no output'): string {
+  const text = output.trim();
+  if (!text) return fallback;
+
+  const spec = classify(text);
+  const line = mostInformativeLine(text);
+  if (spec) return `${spec.code} ${spec.title}${line ? `: ${line}` : ''}`;
+
+  const tail = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    .slice(-3)
+    .join(' | ');
+  return tail || fallback;
+}
+
+/** A Python traceback frame, or the caret/tilde rulers 3.13 prints beneath one. */
+const TRACEBACK_NOISE = /^(Traceback \(most recent call last\)|\s*File "|\s*[~^]+\s*$)/;
+
+/** crytic-compile relays forge's streams with these prefixes. */
+const RELAY_PREFIX = /^(stdout|stderr):\s*/;
+
+/**
+ * The line worth showing from a failed tool run.
+ *
+ * A solc diagnostic (`Error (7920): ...`) is the actual cause of nearly every
+ * compile failure, and it is followed by a `--> file:line:col` pointer, so the
+ * two are joined and preferred over anything else. Failing that, the last line
+ * that is not traceback scaffolding: Python prints the exception message last,
+ * which is exactly where the useful text sits.
+ */
+export function mostInformativeLine(output: string): string | undefined {
+  const lines = output
+    .split('\n')
+    .map((l) => l.replace(RELAY_PREFIX, '').trimEnd())
+    .filter((l) => l.trim().length > 0 && !TRACEBACK_NOISE.test(l));
+
+  // Numbered, so forge's own `Error: Compiler run failed:` wrapper does not win
+  // over the diagnostic it wraps.
+  const solc = lines.findIndex((l) => /^Error \(\d+\):/.test(l.trim()));
+  if (solc >= 0) {
+    const pointer = lines.slice(solc + 1, solc + 3).find((l) => /^\s*-->/.test(l));
+    const message = lines[solc]!.trim();
+    return pointer ? `${message} ${pointer.trim()}` : message;
+  }
+
+  return lines.length > 0 ? lines[lines.length - 1]!.trim() : undefined;
+}
+
 export interface HookriskErrorOptions {
   detail?: string;
   rawOutput?: string;

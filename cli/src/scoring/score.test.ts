@@ -11,6 +11,8 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
+import type { EngineResult, Finding, RuleClass } from '../types.js';
+import { deriveScoringInput, enginesThatLooked } from './derive.js';
 import { loadRubric } from './rubric.js';
 import { type ScoringInput, evaluateCondition, score } from './score.js';
 
@@ -324,5 +326,127 @@ describe('condition evaluation', () => {
   test('an unparseable condition is false, never true by accident', () => {
     assert.equal(evaluateCondition('!!!garbage!!!', values, triggers, flags), false);
     assert.equal(evaluateCondition('', values, triggers, flags), false);
+  });
+});
+
+// --------------------------------------------------------------------------- //
+// Deriving dimensions from findings and engine outcomes
+// --------------------------------------------------------------------------- //
+
+describe('deriveScoringInput', () => {
+  const dimensionIds = rubric.dimensions.map((d) => d.id);
+
+  const engine = (
+    id: string,
+    findings: Finding[] = [],
+    extra: Partial<EngineResult> = {},
+  ): EngineResult => ({ engine: id, version: 't', status: 'ok', findings, durationMs: 1, ...extra });
+
+  const finding = (ruleClass: RuleClass, overrides: Partial<Finding> = {}): Finding => ({
+    id: `${ruleClass}-id`,
+    ruleClass,
+    title: `${ruleClass} title`,
+    description: 'd',
+    severity: 'high',
+    confidence: 'medium',
+    location: { file: 'src/MyHook.sol', line: 18 },
+    evidence: [],
+    engines: [{ engine: 'hookrisk', nativeRule: 'r', severity: 'high', confidence: 'medium' }],
+    ...overrides,
+  });
+
+  const derive = (findings: Finding[], engineResults: EngineResult[], declared = {}) =>
+    deriveScoringInput({ findings, engineResults, declared, dimensionIds });
+
+  test('complexity is unmeasured, never 0, when nothing raised it', () => {
+    // Five legacy hooks were scored "measured 0 / Pass-through only; no hook
+    // state" from exactly this input. HS-01 and HS-02 only ever set a floor of
+    // 1; their silence measures nothing.
+    const input = derive([], [engine('hookrisk')]);
+    const complexity = input.dimensions.complexity!;
+
+    assert.equal(complexity.source, 'unmeasured');
+    assert.equal(complexity.value, undefined);
+    assert.ok(complexity.evidence?.[0]?.includes('no complexity metric'), complexity.evidence?.join(' '));
+
+    // Scoped to complexity: other dimensions are unmeasured for the reason they
+    // always were (rule 2, a class with no detector yet), not for this one.
+    const customMath = input.dimensions.customMath!;
+    assert.equal(customMath.source, 'unmeasured');
+    assert.ok(customMath.evidence?.[0]?.includes('no detector for rounding-direction yet'), customMath.evidence?.join(' '));
+    assert.ok(!customMath.evidence?.[0]?.includes('complexity metric'));
+
+    const scored = score(input, rubric);
+    const scoredComplexity = scored.dimensions.find((d) => d.id === 'complexity')!;
+    assert.equal(scoredComplexity.value, null);
+    assert.equal(scoredComplexity.bracketLabel, null, 'no bracket is asserted from silence');
+  });
+
+  test('complexity keeps its floor of 1 when a structural finding fires', () => {
+    const input = derive([finding('flag-implementation-divergence')], [engine('hookrisk')]);
+    assert.deepEqual(
+      { value: input.dimensions.complexity!.value, source: input.dimensions.complexity!.source },
+      { value: 1, source: 'measured' },
+    );
+  });
+
+  test('a declared complexity still wins when the detectors are silent', () => {
+    const input = derive([], [engine('hookrisk')], { complexity: 3 });
+    const complexity = input.dimensions.complexity!;
+    assert.equal(complexity.source, 'declared');
+    assert.equal(complexity.value, 3);
+    assert.ok(complexity.evidence?.[0]?.startsWith('Not measurable'), complexity.evidence?.join(' '));
+  });
+
+  test('an unsupported-hook-abi finding revokes hookrisk coverage of the target', () => {
+    // The engine ran (status ok) but the detectors never recognised the
+    // contract. Every dimension hookrisk would have measured must come back
+    // unmeasured, not 0.
+    const input = derive(
+      [finding('unsupported-hook-abi', { severity: 'info', title: '2023 getHooksCalls() ABI' })],
+      [engine('hookrisk')],
+    );
+
+    for (const id of ['customMath', 'priceImpactingBehavior', 'complexity']) {
+      const dimension = input.dimensions[id]!;
+      assert.equal(dimension.source, 'unmeasured', `${id} must be unmeasured`);
+      assert.ok(
+        dimension.evidence?.[0]?.includes("did not recognise the target's hook ABI"),
+        `${id}: ${dimension.evidence?.join(' ')}`,
+      );
+    }
+    assert.deepEqual(input.evidence, [], 'a classification fires no trigger evidence');
+  });
+
+  test('an engine that disclaims the target through targetCoverage is treated as not having looked', () => {
+    const input = derive(
+      [],
+      [engine('hookrisk', [], { targetCoverage: { covered: false, reason: 'no hook contract in src/MyHook.sol' } })],
+    );
+    const customMath = input.dimensions.customMath!;
+    assert.equal(customMath.source, 'unmeasured');
+    assert.ok(
+      customMath.evidence?.[0]?.includes('ran but did not analyse the target (no hook contract in src/MyHook.sol)'),
+      customMath.evidence?.join(' '),
+    );
+  });
+
+  test('enginesThatLooked separates ran-and-looked from ran-and-disclaimed', () => {
+    const { looked, declined } = enginesThatLooked(
+      [
+        engine('hookrisk', [], { targetCoverage: { covered: true } }),
+        engine('blocksec', [], { status: 'skipped' }),
+      ],
+      [],
+    );
+    assert.deepEqual([...looked], ['hookrisk']);
+    assert.equal(declined.size, 0, 'a skipped engine neither looked nor disclaimed; it simply did not run');
+  });
+
+  test('a genuine 0 still requires that the responsible engine looked', () => {
+    // No hookrisk at all: customMath cannot be 0, whatever blocksec says.
+    const input = derive([], [engine('blocksec')]);
+    assert.equal(input.dimensions.customMath!.source, 'unmeasured');
+    assert.ok(input.dimensions.customMath!.evidence?.[0]?.includes('which did not run'));
   });
 });

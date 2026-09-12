@@ -78,6 +78,16 @@ const RULE_HELP: Record<string, { name: string; description: string }> = {
     name: 'Rounding favours the caller',
     description: 'Rounding on an exit path resolves in the caller’s favour rather than the pool’s.',
   },
+  'callback-intentionally-disabled': {
+    name: 'Callback intentionally disabled',
+    description:
+      'A hook callback is overridden with a deliberate revert, so the matching PoolManager operation is disabled by design. A classification, not a defect: it explains why the pool cannot, for example, accept liquidity through the PoolManager.',
+  },
+  'unsupported-hook-abi': {
+    name: 'Unsupported hook ABI',
+    description:
+      'The contract looks like a v4 hook but uses an ABI hookrisk cannot analyse, such as the 2023 getHooksCalls()/Hooks.Calls shape. A classification, not a defect — and a coverage statement: no hookrisk detector examined this contract, so its silence is not a clean result.',
+  },
 };
 
 export interface SarifLog {
