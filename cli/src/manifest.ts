@@ -42,6 +42,21 @@ export interface InvariantResult {
   };
 }
 
+/**
+ * The differential harness as an engine row.
+ *
+ * It produces invariants rather than findings, so it does not go through the
+ * engine reconciliation path, but it is an analysis the scan attempted and a
+ * reader must be able to tell "ran and held" from "never ran" without diffing
+ * the invariants array against their memory of what should be there.
+ */
+export interface HarnessSummary {
+  version: string;
+  status: 'ok' | 'skipped' | 'failed';
+  reason?: string;
+  durationMs: number;
+}
+
 export interface ManifestInputs {
   toolVersion: string;
   commandLine?: string;
@@ -53,12 +68,15 @@ export interface ManifestInputs {
   score: ScoreResult;
   engineResults: EngineResult[];
   engineMeta: Map<string, { displayName: string; upstream?: { url: string; license: string } }>;
+  harness: HarnessSummary;
   corroboratedFindings: number;
   uncoveredFunctions: UncoveredFunction[];
   staticAnalysisSkipped: boolean;
-  dynamicAnalysisSkipped: boolean;
   gate?: GatePolicy;
 }
+
+export const HARNESS_ENGINE_ID = 'harness';
+export const HARNESS_DISPLAY_NAME = 'Differential harness (Foundry)';
 
 export type Manifest = Record<string, unknown>;
 
@@ -80,24 +98,41 @@ export function buildManifest(input: ManifestInputs): Manifest {
     target: input.target,
     findings: input.findings.map(serialiseFinding),
     score: serialiseScore(input.score),
-    engines: input.engineResults.map((result) => {
-      const meta = input.engineMeta.get(result.engine);
-      return {
-        engine: result.engine,
-        ...(meta?.displayName ? { displayName: meta.displayName } : {}),
-        version: result.version,
-        status: result.status,
-        ...(result.reason ? { reason: result.reason } : {}),
-        findingCount: result.findings.length,
-        durationMs: result.durationMs,
-        ...(meta?.upstream ? { upstream: meta.upstream } : {}),
-      };
-    }),
+    engines: [
+      ...input.engineResults.map((result) => {
+        const meta = input.engineMeta.get(result.engine);
+        return {
+          engine: result.engine,
+          ...(meta?.displayName ? { displayName: meta.displayName } : {}),
+          version: result.version,
+          status: result.status,
+          ...(result.reason ? { reason: result.reason } : {}),
+          findingCount: result.findings.length,
+          durationMs: result.durationMs,
+          ...(meta?.upstream ? { upstream: meta.upstream } : {}),
+        };
+      }),
+      {
+        engine: HARNESS_ENGINE_ID,
+        displayName: HARNESS_DISPLAY_NAME,
+        version: input.harness.version,
+        status: input.harness.status,
+        ...(input.harness.reason ? { reason: input.harness.reason } : {}),
+        // A failed invariant is the harness's finding; the count is what a
+        // reader scanning the engines table expects to see there.
+        findingCount: (input.invariants ?? []).filter((i) => i.status === 'failed').length,
+        durationMs: input.harness.durationMs,
+      },
+    ],
     coverage: {
       corroboratedFindings: input.corroboratedFindings,
       uncoveredFunctions: input.uncoveredFunctions,
       staticAnalysisSkipped: input.staticAnalysisSkipped,
-      dynamicAnalysisSkipped: input.dynamicAnalysisSkipped,
+      // Derived from the harness status rather than from the --skip-dynamic
+      // flag, so a harness that failed or declined to run reads as "not
+      // analysed" and never as "analysed, nothing found".
+      dynamicAnalysisSkipped: input.harness.status !== 'ok',
+      harnessStatus: input.harness.status,
     },
   };
 

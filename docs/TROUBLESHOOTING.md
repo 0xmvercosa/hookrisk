@@ -60,6 +60,8 @@ problems in one shot and tells you which are fatal:
 | [`HR-E301`](#hr-e301) | `40` | Differential harness could not deploy the hook at a flag-bearing address |
 | [`HR-E302`](#hr-e302) | `41` | Invariant run found a counterexample |
 | [`HR-E303`](#hr-e303) | `42` | Harness timed out before completing its sequences |
+| [`HR-E304`](#hr-e304) | `43` | Differential harness could not set up the twin pools |
+| [`HR-E305`](#hr-e305) | `44` | Hook constructor arguments could not be derived |
 | [`HR-E401`](#hr-e401) | `50` | RPC endpoint is unset or unreachable |
 | [`HR-E402`](#hr-e402) | `50` | Explorer API rejected the request |
 | [`HR-E403`](#hr-e403) | `51` | Codehash changed between scan and report |
@@ -461,6 +463,66 @@ TIMEOUT
 ```
 
 </details>
+
+---
+
+### HR-E304
+
+**Differential harness could not set up the twin pools**
+
+Exit code `43`.
+
+**Why this happens.** The hook was deployed, but building the pools around it failed: pool initialisation or the initial PoolManager liquidity reverted inside a hook callback, or forge exited before running a single sequence. Nothing about the hook's behaviour was observed. hookrisk reports this as a harness failure with every invariant `inconclusive` — deliberately not `passed`, and deliberately not absent, because a dynamic layer that did not run must not look like one that ran and found nothing.
+
+**How to fix it.**
+
+1. Read the unwrapped revert in the reason: it names the callback (e.g. `beforeAddLiquidity (0x259982e5)`) and the hook's own error, decoded from v4's ERC-7751 `WrappedError` wrapper.
+2. A hook that rejects PoolManager liquidity by design (a custom-curve hook holding its own reserves) is handled: the harness records `seeded = "hooked-failed"` and hookrisk marks I2/I3 not-applicable rather than failing. If you see this error instead, the harness in use predates that record — rebuild from the same checkout as the CLI.
+3. A hook that reverts on a static LP fee is retried with `LPFeeLibrary.DYNAMIC_FEE_FLAG`; a revert on both means the hook's `beforeInitialize` needs state the harness does not provide.
+4. Reproduce in isolation: `HOOKRISK_ARTIFACT=... forge test --match-contract GenericHookInvariants -vvvv` inside harness/, with the same environment the CLI logs under `--verbose`.
+
+<details><summary>Raw output that maps to this code</summary>
+
+```text
+harness setUp failed
+setUp\(\).*Failure
+```
+
+</details>
+
+**See also.**
+
+- <docs/INVARIANTS.md>
+
+---
+
+### HR-E305
+
+**Hook constructor arguments could not be derived**
+
+Exit code `44`.
+
+**Why this happens.** The harness deploys the hook itself, so it has to supply whatever the constructor takes. It can derive two shapes on its own — no arguments, or a single `IPoolManager`/`address` — and needs to be told about anything else. This is reported as a skip with the ABI types in the message rather than guessed, because a constructor fed zero addresses produces a hook that reverts somewhere inside `setUp` for a reason nobody can read.
+
+**How to fix it.**
+
+1. Add `[harness] constructorArgs` to hookrisk.toml: an array of strings, one per constructor argument in ABI order.
+2. Use the placeholders for anything the harness deploys itself: `$poolManager`, `$currency0`, `$currency1`, `$owner` (the test contract) and `$hook` (the hook's own flag-bearing address). Each is substituted word-for-word before deployment.
+3. Write every other value the way `cast abi-encode` accepts it — decimal integers, 0x-prefixed addresses and bytes, `true`/`false`. The values are passed to cast verbatim; a cast parse error is repeated in the skip reason.
+4. Struct (tuple) constructor arguments are not supported yet; the skip reason says so when that is the case.
+
+<details><summary>Raw output that maps to this code</summary>
+
+```text
+constructorArgs
+constructor takes .* argument
+```
+
+</details>
+
+**See also.**
+
+- <docs/INVARIANTS.md>
 
 ---
 

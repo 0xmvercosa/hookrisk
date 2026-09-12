@@ -23,19 +23,34 @@
  * user's project: no remappings to reconcile, no solc version to agree on, and
  * the invariants under test are the same bytes CI runs against our own fixtures.
  *
- * ## What it cannot do
+ * ## The contract with the harness
  *
- * The hook must be constructible from `IPoolManager` alone. That covers the
- * `BaseHook` convention and most hooks in the wild, but a hook taking extra
- * constructor arguments is out of reach for now and is reported as such rather
- * than silently skipped. Stated plainly here and in docs/INVARIANTS.md because
- * a dynamic layer that quietly declines to run is worse than one that says it
- * did not.
+ * Everything crosses the process boundary as environment variables in and a
+ * JSON run record out. The full list is in docs/INVARIANTS.md; the pieces that
+ * matter for reading this file:
+ *
+ * - `HOOKRISK_FLAGS=0` plus `HOOKRISK_RUNTIME_CODE` asks the harness to derive
+ *   the permissions itself by calling `getHookPermissions()` on the etched
+ *   runtime code. That is how a hook whose permissions live in an inherited
+ *   base contract (every OpenZeppelin-based hook) gets scanned at all.
+ * - `HOOKRISK_CONSTRUCTOR_ARGS` carries ABI-encoded constructor arguments with
+ *   placeholder addresses the harness substitutes for the real PoolManager,
+ *   currencies, owner and hook address at deployment.
+ * - `HOOKRISK_RUN_ID` names a file the harness writes at the *end* of a
+ *   successful `setUp`. Its absence therefore means `setUp` never finished.
+ *
+ * ## The rule this file exists to enforce
+ *
+ * A dynamic layer that did not run must never look like one that ran and found
+ * nothing. Every early exit here yields either `skipped` with an accurate,
+ * actionable reason, or `failed` with the invariants marked `inconclusive`. The
+ * one thing it never returns is `ok` with an empty result.
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { HookriskError } from './errors.js';
@@ -59,31 +74,49 @@ export const FLAG_BITS: Record<string, number> = {
   afterRemoveLiquidityReturnDelta: 0,
 };
 
-export interface HarnessOptions {
-  /** Root of the user's Foundry project. */
-  projectRoot: string;
-  /** e.g. `src/MyHook.sol`. */
-  sourceFile: string;
-  contractName: string;
-  /** Permission set, usually from `getHookPermissions()`. */
-  permissions: Record<string, boolean>;
-  /** Declared fee bound in basis points, from hookrisk.toml. */
-  maxFeeBips: number;
-  /** Foundry profile: `scan` for CI, `deep` for an overnight run. */
-  profile?: 'scan' | 'deep';
-  timeoutMs: number;
-  log: (message: string) => void;
-  /** Override for tests; normally derived from this module's location. */
-  harnessRoot?: string;
-}
-
-const INVARIANT_MAP: Record<string, { id: 'I1' | 'I2' | 'I3'; name: string }> = {
-  invariant_I1_tokensAreConserved: { id: 'I1', name: 'Conservation and solvency' },
-  invariant_I2_noUndeclaredExtraction: { id: 'I2', name: 'No undeclared extraction' },
-  invariant_I2b_priceIsMonotonic: { id: 'I2', name: 'Price monotonicity (custom curve)' },
-  invariant_I2_hookDoesNotBlockSwaps: { id: 'I2', name: 'Hook does not block swaps' },
-  invariant_I3_noExitReverted: { id: 'I3', name: 'Exit liveness' },
+/**
+ * Placeholder addresses in `HOOKRISK_CONSTRUCTOR_ARGS`. The harness replaces
+ * each 32-byte word holding one of these with the real address before running
+ * the constructor. They are the shared contract between this file, the harness
+ * and hookrisk.toml, so the names here are the names a user writes.
+ */
+export const PLACEHOLDERS: Record<string, string> = {
+  $poolManager: '0x000000000000000000000000000000C0FFEE0001',
+  $currency0: '0x000000000000000000000000000000C0FFEE0002',
+  $currency1: '0x000000000000000000000000000000C0FFEE0003',
+  $owner: '0x000000000000000000000000000000C0FFEE0004',
+  $hook: '0x000000000000000000000000000000C0FFEE0005',
 };
+
+/**
+ * v4 `IHooks` callback selectors, so a revert the PoolManager wrapped can name
+ * the callback that rejected the call rather than just its four bytes.
+ */
+export const CALLBACK_SELECTORS: Record<string, string> = {
+  '0xdc98354e': 'beforeInitialize',
+  '0x6fe7e6eb': 'afterInitialize',
+  '0x259982e5': 'beforeAddLiquidity',
+  '0x9f063efc': 'afterAddLiquidity',
+  '0x21d0ee70': 'beforeRemoveLiquidity',
+  '0x6c2bbe7e': 'afterRemoveLiquidity',
+  '0x575e24b4': 'beforeSwap',
+  '0xb47b2fb1': 'afterSwap',
+  '0xb6a8b0fa': 'beforeDonate',
+  '0xe1b4af69': 'afterDonate',
+};
+
+const INVARIANT_NAMES = {
+  I1: 'Conservation and solvency',
+  I2: 'No undeclared extraction',
+  I3: 'Exit liveness',
+} as const;
+
+const FALLBACK_SOLC = '0.8.26';
+const FALLBACK_OUT = 'out';
+
+// --------------------------------------------------------------------------- //
+// Permissions
+// --------------------------------------------------------------------------- //
 
 /**
  * Read the permission set a hook declares in `getHookPermissions()`.
@@ -97,8 +130,9 @@ const INVARIANT_MAP: Record<string, { id: 'I1' | 'I2' | 'I3'; name: string }> = 
  * is not used at all — permissions come from the address, which is what the
  * PoolManager actually obeys.
  *
- * Returns null when the function is absent, which is meaningful in itself: the
- * hook relies entirely on address bits that nothing in its source verifies.
+ * Returns null when the function is absent from this file, which is the normal
+ * case for a hook that inherits it. That is not a reason to skip: the harness
+ * can derive the flags from the compiled runtime code instead, see `runHarness`.
  */
 export function parseDeclaredPermissions(sourceText: string): Record<string, boolean> | null {
   const start = sourceText.indexOf('getHookPermissions');
@@ -142,55 +176,468 @@ export function flagsFrom(permissions: Record<string, boolean>): number {
   return flags;
 }
 
-/** Locate the harness project shipped with hookrisk. */
-function defaultHarnessRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(join(here, '..', '..', 'harness'));
+/** The inverse of {@link flagsFrom}: a full 14-field permission set from a flag word. */
+export function permissionsFrom(flags: number): Record<string, boolean> {
+  const permissions: Record<string, boolean> = {};
+  for (const [name, bit] of Object.entries(FLAG_BITS)) {
+    permissions[name] = (flags & (1 << bit)) !== 0;
+  }
+  return permissions;
+}
+
+// --------------------------------------------------------------------------- //
+// Project resolution: where the artifact is and which solc built it
+// --------------------------------------------------------------------------- //
+
+export interface ProjectResolution {
+  projectRoot: string;
+  /** Absolute artifact directory, `forge config`'s `out`. */
+  artifactDir: string;
+  solcVersion: string;
+  /** Whether `artifactDir`/`solcVersion` came from forge or from built-in defaults. */
+  configSource: 'forge-config' | 'fallback';
+  solcSource: 'forge-config' | 'artifact-metadata' | 'fallback';
+  /** The hook's artifact, when it could be located. */
+  artifactPath?: string;
+  /** Why it could not be, phrased so the user knows what to do. */
+  artifactReason?: string;
+  /** Anything the reader of the manifest should know about how these were found. */
+  notes: string[];
+}
+
+export type ForgeConfigRunner = (
+  projectRoot: string,
+) => Promise<{ out?: string | null; solc?: string | null }>;
+
+/**
+ * Ask forge where the artifacts are and which compiler built them.
+ *
+ * Read from `forge config --json` rather than by parsing foundry.toml, because
+ * the file is only one of several inputs: profiles, `FOUNDRY_*` environment
+ * variables and `solc_version` spelling all change the answer, and forge is the
+ * only thing that resolves them the way `forge build` did. Uniswap's own hooks
+ * repository sets `out = 'foundry-out'` and was reported as "run forge build
+ * first" after a successful build, which is the failure this replaces.
+ *
+ * When forge itself cannot be run the defaults are used and the manifest says
+ * so, so a scan of a project that builds elsewhere is not silently wrong.
+ */
+export async function resolveProject(
+  projectRoot: string,
+  sourceFile: string,
+  contractName: string,
+  runForgeConfig: ForgeConfigRunner = forgeConfig,
+): Promise<ProjectResolution> {
+  const notes: string[] = [];
+  let out = FALLBACK_OUT;
+  let solc: string | null = null;
+  let configSource: ProjectResolution['configSource'] = 'fallback';
+
+  try {
+    const config = await runForgeConfig(projectRoot);
+    out = config.out || FALLBACK_OUT;
+    solc = config.solc ?? null;
+    configSource = 'forge-config';
+  } catch (err) {
+    notes.push(
+      `\`forge config\` failed in ${projectRoot} (${(err as Error).message.trim()}); ` +
+        `assuming out = "${FALLBACK_OUT}" and solc ${FALLBACK_SOLC}.`,
+    );
+  }
+
+  const artifactDir = resolve(projectRoot, out);
+  const located = locateArtifact(artifactDir, sourceFile, contractName, solc, projectRoot, out);
+
+  let solcVersion = solc ?? FALLBACK_SOLC;
+  let solcSource: ProjectResolution['solcSource'] = solc ? 'forge-config' : 'fallback';
+  if (!solc && 'path' in located) {
+    // forge leaves `solc` null when the project pins nothing and lets forge
+    // auto-detect; the artifact records what was actually used.
+    const fromArtifact = compilerVersionOf(located.path);
+    if (fromArtifact) {
+      solcVersion = fromArtifact;
+      solcSource = 'artifact-metadata';
+    } else {
+      notes.push(`artifact carries no compiler version; assuming solc ${FALLBACK_SOLC}.`);
+    }
+  } else if (!solc) {
+    notes.push(`foundry.toml pins no solc version and no artifact was found; assuming ${FALLBACK_SOLC}.`);
+  }
+
+  return {
+    projectRoot,
+    artifactDir,
+    solcVersion,
+    configSource,
+    solcSource,
+    ...('path' in located ? { artifactPath: located.path } : { artifactReason: located.reason }),
+    notes,
+  };
+}
+
+/**
+ * Find `<out>/<File.sol>/<Contract>.json`, tolerating forge's per-version
+ * naming. When one source file is compiled under several solc versions forge
+ * writes `Contract.0.8.26.json`, `Contract.0.8.29.json` and no plain name; a
+ * project pinning one version gets the plain name. Uniswap's hooks repo does
+ * both in one `out/`.
+ */
+export function locateArtifact(
+  artifactDir: string,
+  sourceFile: string,
+  contractName: string,
+  solc: string | null,
+  projectRoot: string,
+  outName: string,
+): { path: string } | { reason: string } {
+  const fileDir = join(artifactDir, basenameOf(sourceFile));
+  const buildHint = `run \`forge build\` in ${projectRoot} first`;
+
+  if (!existsSync(artifactDir)) {
+    return {
+      reason: `artifact directory ${artifactDir} does not exist (forge config: out = "${outName}") — ${buildHint}.`,
+    };
+  }
+  if (!existsSync(fileDir)) {
+    return {
+      reason:
+        `no compiled artifact for ${basenameOf(sourceFile)} under ${artifactDir} ` +
+        `(forge config: out = "${outName}") — ${buildHint}.`,
+    };
+  }
+
+  const plain = join(fileDir, `${contractName}.json`);
+  if (existsSync(plain)) return { path: plain };
+
+  const versioned = readdirSync(fileDir).filter((name) =>
+    new RegExp(`^${escapeRegExp(contractName)}\\.[0-9]+\\.[0-9]+\\.[0-9]+\\.json$`).test(name),
+  );
+  if (versioned.length === 1) return { path: join(fileDir, versioned[0]!) };
+  if (versioned.length > 1) {
+    const preferred = solc ? `${contractName}.${solc}.json` : null;
+    if (preferred && versioned.includes(preferred)) return { path: join(fileDir, preferred) };
+    return {
+      reason:
+        `${contractName} was compiled under several solc versions (${versioned.join(', ')}) and ` +
+        `foundry.toml pins none of them — set \`solc\` in foundry.toml so the harness knows which build to test.`,
+    };
+  }
+
+  return {
+    reason: `no compiled artifact ${relative(projectRoot, plain)} (forge config: out = "${outName}") — ${buildHint}.`,
+  };
+}
+
+function compilerVersionOf(artifactPath: string): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(artifactPath, 'utf8')) as {
+      metadata?: { compiler?: { version?: string } };
+    };
+    const raw = parsed.metadata?.compiler?.version;
+    // `0.8.26+commit.8a97fa7a` -> `0.8.26`; Slither wants the bare version.
+    return raw ? raw.split('+')[0]! : null;
+  } catch {
+    return null;
+  }
+}
+
+async function forgeConfig(projectRoot: string): Promise<{ out?: string | null; solc?: string | null }> {
+  const proc = await exec('forge', ['config', '--json'], 60_000, projectRoot, {});
+  if (proc.code !== 0) throw new Error(lastLines(proc.stderr || proc.stdout, 2) || `exit ${proc.code}`);
+  const parsed = JSON.parse(proc.stdout) as { out?: string | null; solc?: string | null };
+  return { out: parsed.out, solc: parsed.solc };
+}
+
+// --------------------------------------------------------------------------- //
+// Artifact and constructor arguments
+// --------------------------------------------------------------------------- //
+
+export interface AbiInput {
+  name?: string;
+  type: string;
+  internalType?: string;
+}
+
+export interface Artifact {
+  creationCode: string;
+  runtimeCode: string;
+  constructorInputs: AbiInput[];
+}
+
+/**
+ * Extract what the harness needs from a Foundry artifact, checking it is usable.
+ *
+ * Creation code must be present, which it is not for an abstract contract or an
+ * interface; runtime code is what the harness calls `getHookPermissions()` on
+ * when it derives the flags itself. The constructor ABI decides how arguments
+ * are produced — read from the artifact rather than inferred from source, since
+ * the artifact is what actually gets deployed and a mismatch surfaces otherwise
+ * as an opaque revert deep inside `setUp`.
+ */
+export function readArtifact(artifactPath: string, contractName: string): Artifact | { reason: string } {
+  let parsed: {
+    abi?: Array<{ type: string; inputs?: AbiInput[] }>;
+    bytecode?: { object?: string };
+    deployedBytecode?: { object?: string };
+  };
+  try {
+    parsed = JSON.parse(readFileSync(artifactPath, 'utf8'));
+  } catch (err) {
+    return { reason: `could not read artifact ${artifactPath}: ${(err as Error).message}` };
+  }
+
+  const creation = parsed.bytecode?.object;
+  if (!creation || creation === '0x' || creation.length <= 2) {
+    return {
+      reason: `${contractName} has no creation bytecode — abstract contracts and interfaces cannot be deployed.`,
+    };
+  }
+
+  const ctor = parsed.abi?.find((entry) => entry.type === 'constructor');
+  return {
+    creationCode: hexPrefixed(creation),
+    runtimeCode: hexPrefixed(parsed.deployedBytecode?.object ?? ''),
+    constructorInputs: ctor?.inputs ?? [],
+  };
+}
+
+/** Runs `cast abi-encode "constructor(<types>)" <values...>`; injectable for tests. */
+export type CastRunner = (signature: string, values: string[]) => Promise<ExecResult>;
+
+const CONFIG_KEY = '[harness] constructorArgs';
+
+/**
+ * Produce `HOOKRISK_CONSTRUCTOR_ARGS` for the hook's constructor.
+ *
+ * Three shapes are handled without configuration: no arguments (a factory-style
+ * hook), and a single `address`/`IPoolManager` (the `BaseHook` convention),
+ * which is encoded as the PoolManager placeholder. Anything else needs the user
+ * to say what goes in, one string per ABI input, in hookrisk.toml. Placeholders
+ * are substituted here so the harness sees only addresses; everything else is
+ * handed to `cast abi-encode` verbatim, so the user writes values in the syntax
+ * cast already documents rather than one we would invent.
+ *
+ * The skip reasons name the ABI types and the config key on purpose: the
+ * previous message ("additional constructor arguments are not supported") was
+ * shown to a hook with *zero* arguments and told the user nothing to do.
+ */
+export async function encodeConstructorArgs(
+  contractName: string,
+  inputs: AbiInput[],
+  configured: string[] | undefined,
+  runCast: CastRunner,
+): Promise<{ encoded: string } | { reason: string }> {
+  const signature = `constructor(${inputs.map((i) => i.type).join(',')})`;
+  const describe = inputs.map((i) => `${i.type}${i.name ? ` ${i.name}` : ''}`).join(', ');
+
+  if (configured === undefined) {
+    if (inputs.length === 0) return { encoded: '' };
+    if (inputs.length === 1 && isPoolManagerLike(inputs[0]!)) {
+      return { encoded: addressWord(PLACEHOLDERS.$poolManager!) };
+    }
+    return {
+      reason:
+        `${contractName}'s constructor takes ${inputs.length} argument(s) (${describe}) and the harness can ` +
+        `only derive the IPoolManager on its own. Add ${CONFIG_KEY} to hookrisk.toml with one value per ` +
+        `argument — ${Object.keys(PLACEHOLDERS).join(', ')} are substituted with the harness's own addresses, ` +
+        'anything else is passed literally to `cast abi-encode`. See HR-E305.',
+    };
+  }
+
+  if (configured.length !== inputs.length) {
+    return {
+      reason:
+        `${CONFIG_KEY} has ${configured.length} value(s) but ${contractName}'s constructor takes ` +
+        `${inputs.length} (${describe || 'none'}). See HR-E305.`,
+    };
+  }
+  if (inputs.length === 0) return { encoded: '' };
+
+  const tuple = inputs.find((i) => i.type.startsWith('tuple'));
+  if (tuple) {
+    return {
+      reason:
+        `${contractName}'s constructor takes a struct argument (${tuple.type}${tuple.name ? ` ${tuple.name}` : ''}), ` +
+        `which ${CONFIG_KEY} cannot express yet. See HR-E305.`,
+    };
+  }
+
+  const values = configured.map((value) => PLACEHOLDERS[value] ?? value);
+  let proc: ExecResult;
+  try {
+    proc = await runCast(signature, values);
+  } catch (err) {
+    return { reason: `could not run \`cast abi-encode\` (${(err as Error).message}); cast ships with forge.` };
+  }
+  const encoded = proc.stdout.trim();
+  if (proc.code !== 0 || !/^0x[0-9a-fA-F]*$/.test(encoded)) {
+    return {
+      reason:
+        `\`cast abi-encode "${signature}" ${values.join(' ')}\` failed: ` +
+        `${lastLines(proc.stderr || proc.stdout, 2) || `exit ${proc.code}`}. Check ${CONFIG_KEY}. See HR-E305.`,
+    };
+  }
+  return { encoded };
+}
+
+function isPoolManagerLike(input: AbiInput): boolean {
+  if (input.type !== 'address') return false;
+  const internal = input.internalType ?? 'address';
+  return internal === 'address' || /IPoolManager$/.test(internal);
+}
+
+/** ABI-encode one address as a 32-byte word. */
+function addressWord(address: string): string {
+  return `0x${address.slice(2).toLowerCase().padStart(64, '0')}`;
+}
+
+async function castAbiEncode(signature: string, values: string[]): Promise<ExecResult> {
+  return exec('cast', ['abi-encode', signature, ...values], 30_000, process.cwd(), {});
+}
+
+// --------------------------------------------------------------------------- //
+// Run record
+// --------------------------------------------------------------------------- //
+
+/** What the harness reports about its own setUp, from `harness/out/hookrisk-run-<id>.json`. */
+export interface HarnessRunInfo {
+  flags: number;
+  customCurve: boolean;
+  dynamicFee: boolean;
+  permissionsDerived: boolean;
+  seeded: 'both' | 'hooked-failed';
+  hookedSeedRevert: string;
+}
+
+/** Parse and validate a run record. Throws on anything malformed, since a wrong `seeded` would silently change which invariants apply. */
+export function parseRunRecord(text: string): HarnessRunInfo {
+  const raw = JSON.parse(text) as Record<string, unknown>;
+  const flags = Number(raw.flags);
+  if (!Number.isInteger(flags) || flags < 0) throw new Error(`flags is ${JSON.stringify(raw.flags)}`);
+  const seeded = raw.seeded;
+  if (seeded !== 'both' && seeded !== 'hooked-failed') throw new Error(`seeded is ${JSON.stringify(seeded)}`);
+  for (const key of ['customCurve', 'dynamicFee', 'permissionsDerived'] as const) {
+    if (typeof raw[key] !== 'boolean') throw new Error(`${key} is ${JSON.stringify(raw[key])}`);
+  }
+  return {
+    flags,
+    customCurve: raw.customCurve as boolean,
+    dynamicFee: raw.dynamicFee as boolean,
+    permissionsDerived: raw.permissionsDerived as boolean,
+    seeded,
+    hookedSeedRevert: typeof raw.hookedSeedRevert === 'string' ? raw.hookedSeedRevert : '',
+  };
+}
+
+// --------------------------------------------------------------------------- //
+// Running
+// --------------------------------------------------------------------------- //
+
+export interface HarnessOptions {
+  project: ProjectResolution;
+  /** e.g. `src/MyHook.sol`. */
+  sourceFile: string;
+  contractName: string;
+  /**
+   * Permission set from `getHookPermissions()` in the target file, or null when
+   * the function is inherited — in which case the harness derives it.
+   */
+  permissions: Record<string, boolean> | null;
+  /** `[harness] constructorArgs` from hookrisk.toml, when present. */
+  constructorArgs?: string[];
+  /** Declared fee bound in basis points, from hookrisk.toml. */
+  maxFeeBips: number;
+  /** Foundry profile: `scan` for CI, `deep` for an overnight run. */
+  profile?: 'scan' | 'deep';
+  timeoutMs: number;
+  log: (message: string) => void;
+  /** Override for tests; normally derived from this module's location. */
+  harnessRoot?: string;
+  /** Override for tests. */
+  runCast?: CastRunner;
 }
 
 export interface HarnessOutcome {
   status: 'ok' | 'skipped' | 'failed';
   reason?: string;
   invariants: InvariantResult[];
+  /** forge version, for the manifest's engine row. `n/a` when forge never ran. */
+  version: string;
+  durationMs: number;
+  /** The harness's own account of setUp, when it wrote one. */
+  run?: HarnessRunInfo;
 }
 
 /** Run the differential harness and translate the result. */
 export async function runHarness(options: HarnessOptions): Promise<HarnessOutcome> {
+  const started = Date.now();
   const harnessRoot = options.harnessRoot ?? defaultHarnessRoot();
+  const finish = (outcome: Omit<HarnessOutcome, 'durationMs' | 'version'>, version: string): HarnessOutcome => ({
+    ...outcome,
+    version,
+    durationMs: Date.now() - started,
+  });
 
   if (!existsSync(join(harnessRoot, 'foundry.toml'))) {
-    return skipped(
-      `harness project not found at ${harnessRoot}. The dynamic layer ships with the hookrisk repository; ` +
-        'install from source to use it.',
+    return finish(
+      skipped(
+        `harness project not found at ${harnessRoot}. The dynamic layer ships with the hookrisk repository; ` +
+          'install from source to use it.',
+      ),
+      'n/a',
     );
   }
   if (!existsSync(join(harnessRoot, 'lib', 'v4-core'))) {
-    return skipped(`harness dependencies are not materialised — run \`make deps\` in ${harnessRoot}.`);
+    return finish(skipped(`harness dependencies are not materialised — run \`make deps\` in ${harnessRoot}.`), 'n/a');
   }
 
-  // The artifact Foundry produced for the user's hook.
+  const version = await forgeVersion();
+  if (!version) {
+    return finish(skipped('forge is not installed or not on PATH (HR-E001).'), 'n/a');
+  }
+
+  const { project } = options;
+  if (!project.artifactPath) {
+    return finish(skipped(project.artifactReason ?? 'no compiled artifact found.'), version);
+  }
+
+  const artifact = readArtifact(project.artifactPath, options.contractName);
+  if ('reason' in artifact) return finish(skipped(artifact.reason), version);
+
+  const ctorArgs = await encodeConstructorArgs(
+    options.contractName,
+    artifact.constructorInputs,
+    options.constructorArgs,
+    options.runCast ?? castAbiEncode,
+  );
+  if ('reason' in ctorArgs) return finish(skipped(ctorArgs.reason), version);
+
+  // Flags: from the source declaration when this file has one, otherwise 0 and
+  // the harness reads them from the runtime code. Declaring every permission
+  // false is different from inheriting the declaration, and is the one case
+  // where there is genuinely nothing to compare.
+  const derive = options.permissions === null;
+  const flags = derive ? 0 : flagsFrom(options.permissions!);
+  if (!derive && flags === 0) {
+    return finish(
+      skipped(
+        `${options.contractName} declares every permission false in getHookPermissions(), so the PoolManager ` +
+          'would never invoke it and there is nothing to compare.',
+      ),
+      version,
+    );
+  }
+
+  const declaredCustomCurve = options.permissions?.beforeSwapReturnDelta === true;
   const artifactName = basenameOf(options.sourceFile);
-  const source = join(options.projectRoot, 'out', artifactName, `${options.contractName}.json`);
-  if (!existsSync(source)) {
-    return skipped(
-      `no compiled artifact at ${source} — run \`forge build\` in the target project first.`,
-    );
-  }
+  const runId = randomUUID();
+  const runRecordPath = join(harnessRoot, 'out', `hookrisk-run-${runId}.json`);
 
-  const artifact = readArtifact(source, options.contractName);
-  if ('reason' in artifact) return skipped(artifact.reason);
-
-  const flags = flagsFrom(options.permissions);
-  if (flags === 0) {
-    return skipped(
-      'the hook declares no permissions, so the PoolManager would never invoke it and there is nothing to compare.',
-    );
-  }
-
-  const customCurve = options.permissions.beforeSwapReturnDelta === true;
   options.log(
-    `harness: ${artifactName}:${options.contractName} flags=0x${flags.toString(16)} ` +
-      `maxFee=${options.maxFeeBips}bips${customCurve ? ' (custom curve: I2 -> monotonicity)' : ''}`,
+    `harness: ${artifactName}:${options.contractName} ` +
+      (derive ? 'flags=derived-from-runtime' : `flags=0x${flags.toString(16)}`) +
+      ` maxFee=${options.maxFeeBips}bips ctorArgs=${ctorArgs.encoded ? `${(ctorArgs.encoded.length - 2) / 64} word(s)` : 'none'}` +
+      `${declaredCustomCurve ? ' (custom curve: I2 -> monotonicity)' : ''} run=${runId}`,
   );
 
   const proc = await exec(
@@ -202,46 +649,134 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessOutcom
       FOUNDRY_PROFILE: options.profile ?? 'scan',
       HOOKRISK_ARTIFACT: `${artifactName}:${options.contractName}`,
       HOOKRISK_CREATION_CODE: artifact.creationCode,
+      HOOKRISK_RUNTIME_CODE: artifact.runtimeCode,
       HOOKRISK_FLAGS: String(flags),
+      HOOKRISK_CONSTRUCTOR_ARGS: ctorArgs.encoded,
       HOOKRISK_MAX_FEE_BIPS: String(options.maxFeeBips),
-      HOOKRISK_CUSTOM_CURVE: customCurve ? '1' : '0',
+      HOOKRISK_CUSTOM_CURVE: declaredCustomCurve ? '1' : '0',
+      HOOKRISK_RUN_ID: runId,
     },
   ).catch((err: Error) => ({ code: -1, stdout: '', stderr: err.message }));
 
+  // Read the run record before anything can return, and remove it: it is
+  // per-run scratch, and a stale one from an earlier run must never be read by
+  // a later one — hence the random id as well.
+  const record = readRunRecord(runRecordPath);
+
   if (!proc.stdout.trim()) {
-    return {
-      status: 'failed',
-      reason: `forge produced no output: ${lastLines(proc.stderr, 3)}`,
-      invariants: [],
-    };
+    return finish(failed(`forge produced no output: ${lastLines(proc.stderr, 3)}`), version);
   }
 
-  let report: Record<string, { test_results: Record<string, ForgeTestResult> }>;
+  let report: ForgeReport;
   try {
     report = JSON.parse(proc.stdout);
   } catch {
-    return {
-      status: 'failed',
-      reason: `could not parse forge output: ${lastLines(proc.stdout || proc.stderr, 3)}`,
-      invariants: [],
-    };
+    return finish(failed(`could not parse forge output: ${lastLines(proc.stdout || proc.stderr, 3)}`), version);
   }
 
-  const invariants = translate(report, customCurve);
-  const failures = invariants.filter((i) => i.status === 'failed').length;
+  if (record && 'error' in record) return finish(failed(record.error), version);
+  const run = record ?? undefined;
+
+  // The harness's view wins over ours when it has one: it read the permissions
+  // off the deployed code, which is what the PoolManager will obey.
+  const customCurve = run?.customCurve ?? declaredCustomCurve;
+  const translated = translate(report, {
+    customCurve,
+    ...(run ? { seeded: run.seeded, hookedSeedRevert: run.hookedSeedRevert } : {}),
+  });
+
+  if (translated.status === 'failed') {
+    return finish({ ...translated, ...(run ? { run } : {}) }, version);
+  }
+
+  if (derive && !run) {
+    // setUp reported success but left no record, so we do not know which
+    // permissions the harness tested under. Reporting the invariants as passed
+    // would be vouching for a configuration nobody can see.
+    return finish(
+      failed(
+        `the harness wrote no run record at ${runRecordPath} although setUp succeeded, so the permissions it ` +
+          'derived from the runtime code are unknown. The harness and CLI versions may be out of step — ' +
+          'rebuild both from the same checkout.',
+      ),
+      version,
+    );
+  }
+
+  const failures = translated.invariants.filter((i) => i.status === 'failed').length;
   options.log(
-    `harness: ${invariants.length} invariant(s), ${failures} failed`,
+    `harness: ${translated.invariants.length} invariant(s), ${failures} failed` +
+      (run ? ` (flags=0x${run.flags.toString(16)}${run.permissionsDerived ? ' derived' : ''}, seeded=${run.seeded}${run.dynamicFee ? ', dynamic fee' : ''})` : ''),
   );
 
-  return { status: 'ok', invariants };
+  return finish({ status: 'ok', invariants: translated.invariants, ...(run ? { run } : {}) }, version);
 }
 
-interface ForgeTestResult {
+function readRunRecord(path: string): HarnessRunInfo | { error: string } | null {
+  if (!existsSync(path)) return null;
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (err) {
+    return { error: `could not read the harness run record ${path}: ${(err as Error).message}` };
+  } finally {
+    try {
+      unlinkSync(path);
+    } catch {
+      // Best effort; the random id keeps a leftover from ever being re-read.
+    }
+  }
+  try {
+    return parseRunRecord(text);
+  } catch (err) {
+    return { error: `the harness run record ${path} is malformed (${(err as Error).message}).` };
+  }
+}
+
+async function forgeVersion(): Promise<string | null> {
+  try {
+    const proc = await exec('forge', ['--version'], 15_000, process.cwd(), {});
+    if (proc.code !== 0) return null;
+    // `forge Version: 1.7.1` on recent builds, `forge 0.2.0 (abc123 2024-...)` on older ones.
+    const match = /forge(?:\s+Version:)?\s+v?(\S+)/i.exec(proc.stdout);
+    return match?.[1] ?? proc.stdout.trim().split('\n')[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// --------------------------------------------------------------------------- //
+// Translation
+// --------------------------------------------------------------------------- //
+
+export interface ForgeTestResult {
   status: string;
   reason?: string | null;
   counterexample?: unknown;
   kind?: { Invariant?: { runs: number; calls: number; reverts: number } };
 }
+
+export type ForgeReport = Record<string, { test_results?: Record<string, ForgeTestResult> }>;
+
+export interface TranslateOptions {
+  customCurve: boolean;
+  seeded?: 'both' | 'hooked-failed';
+  hookedSeedRevert?: string;
+}
+
+export interface Translation {
+  status: 'ok' | 'failed';
+  reason?: string;
+  invariants: InvariantResult[];
+}
+
+const INVARIANT_MAP: Record<string, { id: 'I1' | 'I2' | 'I3'; name: string }> = {
+  invariant_I1_tokensAreConserved: { id: 'I1', name: INVARIANT_NAMES.I1 },
+  invariant_I2_noUndeclaredExtraction: { id: 'I2', name: INVARIANT_NAMES.I2 },
+  invariant_I2b_priceIsMonotonic: { id: 'I2', name: 'Price monotonicity (custom curve)' },
+  invariant_I2_hookDoesNotBlockSwaps: { id: 'I2', name: 'Hook does not block swaps' },
+  invariant_I3_noExitReverted: { id: 'I3', name: INVARIANT_NAMES.I3 },
+};
 
 /**
  * Turn forge's per-test results into manifest invariant entries.
@@ -251,15 +786,30 @@ interface ForgeTestResult {
  * Reporting three rows for one property would make a single defect look like
  * three, which is the same double-counting problem the engine dedupe layer
  * exists to solve.
+ *
+ * Two outcomes are failures of the *harness* rather than of the hook, and are
+ * reported as such with every invariant `inconclusive`: `setUp()` reverting
+ * (forge emits it as a test row of its own and runs nothing else), and a
+ * report with no invariant rows at all. Before this, both produced
+ * "0 invariant(s), 0 failed" with status ok — a dynamic layer that had not run
+ * reporting exactly what a clean hook reports.
  */
-function translate(
-  report: Record<string, { test_results: Record<string, ForgeTestResult> }>,
-  customCurve: boolean,
-): InvariantResult[] {
+export function translate(report: ForgeReport, options: TranslateOptions): Translation {
   const merged = new Map<string, InvariantResult>();
 
   for (const suite of Object.values(report)) {
-    for (const [rawName, result] of Object.entries(suite.test_results ?? {})) {
+    const results = suite.test_results ?? {};
+
+    const setUp = results['setUp()'];
+    if (setUp && setUp.status !== 'Success') {
+      const revert = unwrapRevert(setUp.reason ?? '');
+      const reason =
+        `harness setUp failed: ${describeRevert(revert)}. The twin pools could not be built, so no ` +
+        'sequence ran and nothing about the hook was observed (HR-E304).';
+      return { status: 'failed', reason, invariants: inconclusive(reason, revert.selector) };
+    }
+
+    for (const [rawName, result] of Object.entries(results)) {
       const name = rawName.replace(/\(\)$/, '');
       const mapping = INVARIANT_MAP[name];
       if (!mapping) continue;
@@ -267,8 +817,8 @@ function translate(
       // The two I2 variants are mutually exclusive by design: one is skipped
       // whenever the other applies. Discarding the inapplicable one keeps a
       // vacuous pass out of the report.
-      if (name === 'invariant_I2_noUndeclaredExtraction' && customCurve) continue;
-      if (name === 'invariant_I2b_priceIsMonotonic' && !customCurve) continue;
+      if (name === 'invariant_I2_noUndeclaredExtraction' && options.customCurve) continue;
+      if (name === 'invariant_I2b_priceIsMonotonic' && !options.customCurve) continue;
 
       const invariant = toInvariant(mapping.id, mapping.name, result);
       const existing = merged.get(mapping.id);
@@ -284,9 +834,24 @@ function translate(
     }
   }
 
+  if (merged.size === 0) {
+    const reason =
+      'forge reported no invariant results for GenericHookInvariants. The harness did not run its sequences — ' +
+      'check that the harness builds (`forge build` in harness/) and that HOOKRISK_ARTIFACT reached it.';
+    return { status: 'failed', reason, invariants: inconclusive(reason) };
+  }
+
+  // Three forge rows merge into I2 and forge lists them alphabetically, so a
+  // passing I2 would otherwise be named after whichever row sorts first. A
+  // failing I2 keeps the failing row's name, which is the informative one.
+  const i2 = merged.get('I2');
+  if (i2 && i2.status !== 'failed') {
+    i2.name = options.customCurve ? INVARIANT_MAP.invariant_I2b_priceIsMonotonic!.name : INVARIANT_NAMES.I2;
+  }
+
   // I2 against a custom curve is not merely absent, it is inapplicable — a
   // distinction the schema keeps and a reader needs.
-  if (customCurve && merged.has('I2')) {
+  if (options.customCurve && merged.has('I2')) {
     const entry = merged.get('I2')!;
     entry.detail =
       (entry.detail ? `${entry.detail} ` : '') +
@@ -294,21 +859,29 @@ function translate(
       'price monotonicity was asserted instead.';
   }
 
-  return [...merged.values()].sort((a, b) => a.id.localeCompare(b.id));
+  // A hook that refuses PoolManager liquidity (the "no v4 liquidity" pattern of
+  // a hook that keeps its own reserves) leaves the hooked pool empty. Without a
+  // custom curve nothing can be traded, so I2 and I3 measured nothing and must
+  // not read as passes; I1 still holds meaning because the hook may have moved
+  // tokens during the attempt.
+  if (options.seeded === 'hooked-failed' && !options.customCurve) {
+    const revert = options.hookedSeedRevert ? describeRevert(unwrapRevert(options.hookedSeedRevert)) : null;
+    const detail =
+      'The hook rejected the harness\'s initial PoolManager liquidity' +
+      (revert ? ` (${revert})` : '') +
+      ', so the hooked pool has no v4 liquidity and no swap or exit could be exercised against it. ' +
+      'Only a custom-curve hook can trade in that state; this one does not declare beforeSwapReturnDelta.';
+    for (const id of ['I2', 'I3'] as const) {
+      merged.set(id, { id, name: INVARIANT_NAMES[id], status: 'not-applicable', detail });
+    }
+  }
+
+  return { status: 'ok', invariants: [...merged.values()].sort((a, b) => a.id.localeCompare(b.id)) };
 }
 
-function toInvariant(
-  id: 'I1' | 'I2' | 'I3',
-  name: string,
-  result: ForgeTestResult,
-): InvariantResult {
+function toInvariant(id: 'I1' | 'I2' | 'I3', name: string, result: ForgeTestResult): InvariantResult {
   const stats = result.kind?.Invariant;
-  const status =
-    result.status === 'Success'
-      ? 'passed'
-      : result.status === 'Skipped'
-        ? 'skipped'
-        : 'failed';
+  const status = result.status === 'Success' ? 'passed' : result.status === 'Skipped' ? 'skipped' : 'failed';
 
   const entry: InvariantResult = {
     id,
@@ -318,77 +891,184 @@ function toInvariant(
   };
 
   if (status === 'failed' && result.reason) {
-    entry.detail = result.reason;
-    entry.counterexample = { revertRaw: String(result.counterexample ?? '') };
+    const revert = unwrapRevert(result.reason);
+    entry.detail = revert.raw === revert.message ? result.reason : `${result.reason} — ${describeRevert(revert)}`;
+    entry.counterexample = {
+      revertRaw: String(result.counterexample ?? result.reason),
+      ...(revert.selector ? { revertSelector: revert.selector } : {}),
+    };
   }
 
   return entry;
 }
 
-/**
- * Extract creation bytecode from a Foundry artifact, checking it is usable.
- *
- * Two things must hold. The constructor must take exactly the IPoolManager,
- * because that is what the harness passes; and the creation code must be
- * present, which it is not for an abstract contract or an interface. Both are
- * read from the artifact rather than inferred from source, since the artifact is
- * what actually gets deployed — and a mismatch surfaces otherwise as an opaque
- * revert deep inside `setUp`.
- */
-function readArtifact(
-  artifactPath: string,
-  contractName: string,
-): { creationCode: string } | { reason: string } {
-  let parsed: {
-    abi?: Array<{ type: string; inputs?: unknown[] }>;
-    bytecode?: { object?: string };
-  };
-  try {
-    parsed = JSON.parse(readFileSync(artifactPath, 'utf8'));
-  } catch (err) {
-    return { reason: `could not read artifact ${artifactPath}: ${(err as Error).message}` };
-  }
+// --------------------------------------------------------------------------- //
+// Revert unwrapping
+// --------------------------------------------------------------------------- //
 
-  const object = parsed.bytecode?.object;
-  if (!object || object === '0x' || object.length <= 2) {
-    return {
-      reason: `${contractName} has no creation bytecode — abstract contracts and interfaces cannot be deployed.`,
-    };
-  }
-
-  const ctor = parsed.abi?.find((entry) => entry.type === 'constructor');
-  const argc = ctor?.inputs?.length ?? 0;
-  if (argc !== 1) {
-    return {
-      reason:
-        `${contractName}'s constructor takes ${argc} argument(s); the harness supplies exactly one ` +
-        '(the IPoolManager). Hooks with additional constructor arguments are not yet supported — ' +
-        'see docs/INVARIANTS.md.',
-    };
-  }
-
-  return { creationCode: object.startsWith('0x') ? object : `0x${object}` };
+export interface UnwrappedRevert {
+  /** The v4 callback whose revert was wrapped, when the selector is one of IHooks'. */
+  callback?: string;
+  callbackSelector?: string;
+  /** The innermost error's 4-byte selector, when there was data. */
+  selector?: string;
+  /** Human-readable innermost error: `Error("…")`, `Panic(0x11)`, or the selector. */
+  message: string;
+  raw: string;
 }
 
-function skipped(reason: string): HarnessOutcome {
+const WRAPPED_ERROR_SELECTOR = '0x90bfb865';
+const ERROR_STRING_SELECTOR = '0x08c379a0';
+const PANIC_SELECTOR = '0x4e487b71';
+
+const PANIC_CODES: Record<number, string> = {
+  0x01: 'assert failed',
+  0x11: 'arithmetic overflow or underflow',
+  0x12: 'division by zero',
+  0x21: 'invalid enum value',
+  0x22: 'corrupted storage byte array',
+  0x31: 'pop on empty array',
+  0x32: 'array index out of bounds',
+  0x41: 'out of memory',
+  0x51: 'call to uninitialised function pointer',
+};
+
+/**
+ * Unwrap v4's ERC-7751 `WrappedError(address,bytes4,bytes,bytes)` down to the
+ * hook's own revert.
+ *
+ * The PoolManager never propagates a hook's revert verbatim:
+ * `CustomRevert.bubbleUpAndRevertWith` wraps it with the hook address and the
+ * callback selector, and forge prints the wrapper. Both the textual form forge
+ * emits (`WrappedError(0x…, 0x259982e5, 0x08c379a0…, 0x…)`) and raw calldata
+ * starting with the selector are accepted, and nesting is followed, because a
+ * hook that itself calls another contract produces a wrapper inside a wrapper.
+ */
+export function unwrapRevert(reason: string): UnwrappedRevert {
+  const raw = reason.trim();
+
+  const textual = /WrappedError\((0x[0-9a-fA-F]{40}),\s*(0x[0-9a-fA-F]{8}),\s*(0x[0-9a-fA-F]*),\s*(0x[0-9a-fA-F]*)\)/.exec(
+    raw,
+  );
+  if (textual) {
+    return { ...withCallback(textual[2]!, unwrapRevert(textual[3]!)), raw };
+  }
+
+  if (/^0x[0-9a-fA-F]*$/.test(raw)) {
+    return { ...decodeRevertData(raw), raw };
+  }
+
+  // forge already rendered it (`revert: …`, `CustomError(…)`, `EvmError: …`).
+  return { message: raw, raw };
+}
+
+function decodeRevertData(hex: string): Omit<UnwrappedRevert, 'raw'> {
+  const data = hex.slice(2).toLowerCase();
+  if (data.length < 8) return { message: data.length === 0 ? 'reverted without data' : `0x${data}` };
+
+  const selector = `0x${data.slice(0, 8)}`;
+  const body = data.slice(8);
+
+  if (selector === WRAPPED_ERROR_SELECTOR && body.length >= 4 * 64) {
+    const callbackSelector = `0x${word(body, 1).slice(0, 8)}`;
+    const reasonOffset = Number(BigInt(`0x${word(body, 2)}`)) * 2;
+    return withCallback(callbackSelector, decodeRevertData(`0x${readBytes(body, reasonOffset)}`));
+  }
+
+  if (selector === ERROR_STRING_SELECTOR && body.length >= 2 * 64) {
+    const offset = Number(BigInt(`0x${word(body, 0)}`)) * 2;
+    const text = Buffer.from(readBytes(body, offset), 'hex').toString('utf8');
+    return { selector, message: `Error(${JSON.stringify(text)})` };
+  }
+
+  if (selector === PANIC_SELECTOR && body.length >= 64) {
+    const code = Number(BigInt(`0x${word(body, 0)}`));
+    const meaning = PANIC_CODES[code];
+    return { selector, message: `Panic(0x${code.toString(16).padStart(2, '0')}${meaning ? `: ${meaning}` : ''})` };
+  }
+
+  return { selector, message: `custom error ${selector}` };
+}
+
+/**
+ * Attach the callback a wrapper names to the innermost error it carries. The
+ * outermost wrapper wins: that is the IHooks callback the PoolManager invoked,
+ * whereas an inner wrapper describes something the hook itself called.
+ */
+function withCallback(
+  callbackSelector: string,
+  inner: Omit<UnwrappedRevert, 'raw'> | UnwrappedRevert,
+): Omit<UnwrappedRevert, 'raw'> {
+  const selector = callbackSelector.toLowerCase();
+  const callback = CALLBACK_SELECTORS[selector];
+  return {
+    message: inner.message,
+    ...(inner.selector ? { selector: inner.selector } : {}),
+    callbackSelector: selector,
+    ...(callback ? { callback } : {}),
+  };
+}
+
+/** Render an unwrapped revert for a reason string. */
+export function describeRevert(revert: UnwrappedRevert): string {
+  if (revert.callbackSelector) {
+    const callback = revert.callback ?? 'a callback';
+    return `${callback} (${revert.callbackSelector}) reverted with ${revert.message}`;
+  }
+  return revert.message;
+}
+
+const word = (body: string, index: number): string => body.slice(index * 64, (index + 1) * 64).padEnd(64, '0');
+
+function readBytes(body: string, offset: number): string {
+  const length = Number(BigInt(`0x${word(body, offset / 64)}`)) * 2;
+  return body.slice(offset + 64, offset + 64 + length);
+}
+
+// --------------------------------------------------------------------------- //
+// Helpers
+// --------------------------------------------------------------------------- //
+
+/** Locate the harness project shipped with hookrisk. */
+function defaultHarnessRoot(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return resolve(join(here, '..', '..', 'harness'));
+}
+
+function skipped(reason: string): Omit<HarnessOutcome, 'durationMs' | 'version'> {
   return {
     status: 'skipped',
     reason,
     invariants: (['I1', 'I2', 'I3'] as const).map((id) => ({
       id,
-      name: { I1: 'Conservation and solvency', I2: 'No undeclared extraction', I3: 'Exit liveness' }[
-        id
-      ],
+      name: INVARIANT_NAMES[id],
       status: 'skipped' as const,
       detail: reason,
     })),
   };
 }
 
+function failed(reason: string): Omit<HarnessOutcome, 'durationMs' | 'version'> {
+  return { status: 'failed', reason, invariants: inconclusive(reason) };
+}
+
+/** Every invariant `inconclusive`: the harness ran into something before it could measure. */
+function inconclusive(detail: string, revertSelector?: string): InvariantResult[] {
+  return (['I1', 'I2', 'I3'] as const).map((id) => ({
+    id,
+    name: INVARIANT_NAMES[id],
+    status: 'inconclusive' as const,
+    detail,
+    ...(revertSelector ? { counterexample: { revertSelector, revertRaw: detail } } : {}),
+  }));
+}
+
 const basenameOf = (path: string): string => path.split('/').pop() ?? path;
 const lastLines = (s: string, n: number): string => s.trim().split('\n').slice(-n).join(' | ');
+const hexPrefixed = (s: string): string => (s.startsWith('0x') || s === '' ? s : `0x${s}`);
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-interface ExecResult {
+export interface ExecResult {
   code: number;
   stdout: string;
   stderr: string;
@@ -415,7 +1095,7 @@ function exec(
       if (settled) return;
       settled = true;
       child.kill('SIGKILL');
-      reject(new HookriskError('HR-E303', { detail: `forge exceeded ${Math.round(timeoutMs / 1000)}s.` }));
+      reject(new HookriskError('HR-E303', { detail: `${cmd} exceeded ${Math.round(timeoutMs / 1000)}s.` }));
     }, timeoutMs);
 
     child.stdout.on('data', (d) => (stdout += d.toString()));
