@@ -54,7 +54,32 @@ export interface HarnessSummary {
   version: string;
   status: 'ok' | 'skipped' | 'failed';
   reason?: string;
+  /** Catalogue code (`HR-E304`) when failed. Parsed from `reason` when absent. */
+  errorCode?: string;
   durationMs: number;
+}
+
+/**
+ * What the harness actually did, summed over every completed fuzz sequence
+ * from `harness/out/hookrisk-obs-<RUN_ID>.jsonl`. This is the difference
+ * between "I2 passed" and "I2 passed over zero compared swaps": a reader of
+ * the manifest gets the counts, and the CLI marks an invariant with no
+ * relevant observations inconclusive rather than passed.
+ */
+export interface HarnessObservations {
+  swapsExecuted?: number;
+  swapsCompared?: number;
+  swapsSkipped?: number;
+  /** Sequences in which the hooked pool's swap reverted while the reference pool's did not. */
+  hookedSwapReverted?: number;
+  positionsOpened?: number;
+  positionsClosed?: number;
+  donations?: number;
+  priceChecks?: number;
+  monotonicityViolations?: number;
+  exitFailures?: number;
+  /** Fuzz sequences the counts were summed over. */
+  sequences?: number;
 }
 
 export interface ManifestInputs {
@@ -69,10 +94,23 @@ export interface ManifestInputs {
   engineResults: EngineResult[];
   engineMeta: Map<string, { displayName: string; upstream?: { url: string; license: string } }>;
   harness: HarnessSummary;
+  /** Summed harness observation log; absent when the harness produced none. */
+  observations?: HarnessObservations;
   corroboratedFindings: number;
   uncoveredFunctions: UncoveredFunction[];
   staticAnalysisSkipped: boolean;
   gate?: GatePolicy;
+}
+
+/**
+ * The catalogue code in a failure reason, wherever the engine put it: the
+ * Slither adapter leads with it (`HR-E202 …`), the harness bridge closes with
+ * it (`… (HR-E304)`). A structured field will replace this once every engine
+ * carries one; until then the code is parsed rather than re-derived, so the
+ * manifest never names a code the reason does not.
+ */
+export function errorCodeOf(reason: string | undefined): string | undefined {
+  return reason?.match(/\bHR-E\d{3}\b/)?.[0];
 }
 
 export const HARNESS_ENGINE_ID = 'harness';
@@ -101,12 +139,14 @@ export function buildManifest(input: ManifestInputs): Manifest {
     engines: [
       ...input.engineResults.map((result) => {
         const meta = input.engineMeta.get(result.engine);
+        const errorCode = result.status === 'failed' ? errorCodeOf(result.reason) : undefined;
         return {
           engine: result.engine,
           ...(meta?.displayName ? { displayName: meta.displayName } : {}),
           version: result.version,
           status: result.status,
           ...(result.reason ? { reason: result.reason } : {}),
+          ...(errorCode ? { errorCode } : {}),
           findingCount: result.findings.length,
           durationMs: result.durationMs,
           ...(meta?.upstream ? { upstream: meta.upstream } : {}),
@@ -118,6 +158,7 @@ export function buildManifest(input: ManifestInputs): Manifest {
         version: input.harness.version,
         status: input.harness.status,
         ...(input.harness.reason ? { reason: input.harness.reason } : {}),
+        ...(harnessErrorCode(input.harness) ? { errorCode: harnessErrorCode(input.harness) } : {}),
         // A failed invariant is the harness's finding; the count is what a
         // reader scanning the engines table expects to see there.
         findingCount: (input.invariants ?? []).filter((i) => i.status === 'failed').length,
@@ -133,6 +174,7 @@ export function buildManifest(input: ManifestInputs): Manifest {
       // analysed" and never as "analysed, nothing found".
       dynamicAnalysisSkipped: input.harness.status !== 'ok',
       harnessStatus: input.harness.status,
+      ...(input.observations ? { observations: input.observations } : {}),
     },
   };
 
@@ -151,6 +193,9 @@ export function buildManifest(input: ManifestInputs): Manifest {
 
   return manifest;
 }
+
+const harnessErrorCode = (harness: HarnessSummary): string | undefined =>
+  harness.status === 'failed' ? (harness.errorCode ?? errorCodeOf(harness.reason)) : undefined;
 
 function serialiseFinding(finding: Finding): Record<string, unknown> {
   return {
@@ -173,6 +218,12 @@ function serialiseFinding(finding: Finding): Record<string, unknown> {
     ...(finding.informsDimensions?.length ? { informsDimensions: finding.informsDimensions } : {}),
     ...(finding.informsTriggers?.length ? { informsTriggers: finding.informsTriggers } : {}),
     ...(finding.references?.length ? { references: finding.references } : {}),
+    // The hook-profile payload. Carried on the finding rather than lifted to a
+    // top-level section so the manifest keeps one shape per rule class and a
+    // consumer reads the profile where it was reported.
+    ...(finding.metrics ? { metrics: finding.metrics } : {}),
+    ...(finding.callbacks ? { callbacks: finding.callbacks } : {}),
+    ...(finding.permissions ? { permissions: finding.permissions } : {}),
   };
 }
 
@@ -216,8 +267,16 @@ function serialiseScore(score: ScoreResult): Record<string, unknown> {
  * succeeded and the hook did not clear the bar. Conflating the two would make
  * "hookrisk is broken" and "your hook has a problem" indistinguishable to a CI
  * job, and only one of those should page someone.
+ *
+ * An undetermined tier is a deliberate choice, not an automatic failure. With
+ * six of nine dimensions unmeasured the upper bound is High on nearly every
+ * hook, so a gate that failed on it would fail every scan on hookrisk's own
+ * coverage and tell the user nothing about their hook. The tier gate therefore
+ * fails on what was *measured*: the lower bound above `maxTier` fails, the
+ * upper bound above it fails only under `failOnInconclusive`, and otherwise the
+ * gate passes with a note that says exactly what it could not rule out.
  */
-function evaluateGate(
+export function evaluateGate(
   policy: GatePolicy,
   score: ScoreResult,
   findings: Finding[],
@@ -225,6 +284,7 @@ function evaluateGate(
   invariants: InvariantResult[],
 ): Record<string, unknown> {
   const failures: string[] = [];
+  const notes: string[] = [];
   const tierRank = { low: 0, medium: 1, high: 2 } as const;
 
   // A violated invariant fails the gate unconditionally, whatever the tier says
@@ -242,19 +302,34 @@ function evaluateGate(
     );
   }
 
-  if (policy.maxTier && tierRank[score.tier.id] > tierRank[policy.maxTier]) {
-    failures.push(
-      `risk tier is ${score.tier.name} (${score.total}/33), above the configured maximum of ${policy.maxTier}`,
-    );
-  }
+  if (policy.maxTier) {
+    const lowerExceeds = tierRank[score.tier.id] > tierRank[policy.maxTier];
+    const upperExceeds = tierRank[score.tierUpperBound.id] > tierRank[policy.maxTier];
+    const range = `undetermined between ${score.tier.name} and ${score.tierUpperBound.name}`;
 
-  // An inconclusive tier is not a pass. If missing data could put the hook above
-  // the gate, saying "passed" would be asserting something unknown.
-  if (policy.maxTier && score.inconclusive && tierRank[score.tierUpperBound.id] > tierRank[policy.maxTier]) {
-    failures.push(
-      `tier is undetermined between ${score.tier.name} and ${score.tierUpperBound.name}; ` +
-        `the upper bound exceeds the configured maximum of ${policy.maxTier}`,
-    );
+    if (lowerExceeds) {
+      // Measured evidence alone puts the hook above the gate; the range, when
+      // there is one, only says how much further it might go.
+      failures.push(
+        `risk tier is ${score.tier.name} (${score.total}/33)` +
+          (score.inconclusive ? `, ${range},` : '') +
+          ` above the configured maximum of ${policy.maxTier}`,
+      );
+    } else if (score.inconclusive && upperExceeds) {
+      const unmeasured = `${score.unmeasured.length} dimension(s) unmeasured: ${score.unmeasured.join(', ')}`;
+      if (policy.failOnInconclusive) {
+        failures.push(
+          `tier is ${range}; the upper bound exceeds the configured maximum of ${policy.maxTier} ` +
+            `and failOnInconclusive is set (${unmeasured})`,
+        );
+      } else {
+        notes.push(
+          `tier is ${range}; the measured lower bound is within the configured maximum of ${policy.maxTier} ` +
+            `and failOnInconclusive is off, so the range does not fail the gate (${unmeasured}). ` +
+            'Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.',
+        );
+      }
+    }
   }
 
   if (policy.maxSeverity) {
@@ -281,7 +356,9 @@ function evaluateGate(
     passed: failures.length === 0,
     ...(policy.maxTier ? { maxTier: policy.maxTier } : {}),
     ...(policy.maxSeverity ? { maxSeverity: policy.maxSeverity } : {}),
+    ...(policy.failOnInconclusive !== undefined ? { failOnInconclusive: policy.failOnInconclusive } : {}),
     failures,
+    ...(notes.length > 0 ? { notes } : {}),
   };
 }
 
@@ -339,6 +416,17 @@ const SEVERITY_ICON: Record<Severity, string> = {
   info: 'ℹ️',
 };
 
+/** Report labels for the hook-profile metrics; unknown metrics render by name. */
+const PROFILE_METRIC_LABEL: Record<string, string> = {
+  callbacksImplemented: 'Callbacks implemented (count)',
+  callbacksDeclared: 'Callbacks declared',
+  stateWritesInCallbacks: 'State writes in callbacks',
+  externalCallsInSwapPath: 'External calls in the swap path',
+  internalFunctionsReachableFromCallbacks: 'Internal functions reachable from callbacks',
+  usesReturnsDelta: 'Returns a delta',
+  hasOwnerOnlyFunctions: 'Owner-only surface',
+};
+
 /** Render HOOK_RISK.md, the human-facing summary. */
 export function renderMarkdown(manifest: Manifest): string {
   const score = manifest.score as ReturnType<typeof serialiseScore>;
@@ -376,6 +464,12 @@ export function renderMarkdown(manifest: Manifest): string {
         : `❌ **Gate failed.**\n${(gate.failures as string[]).map((f) => `- ${f}`).join('\n')}`,
       '',
     );
+    // What the gate chose not to fail on. A pass with an undetermined tier is
+    // a policy decision the reader should see next to the verdict, not infer
+    // from the score table further down.
+    for (const note of (gate.notes as string[] | undefined) ?? []) {
+      out.push(`> ℹ️ ${note}`, '');
+    }
   }
 
   // --- target ---
@@ -396,6 +490,30 @@ export function renderMarkdown(manifest: Manifest): string {
         'this report describes something that no longer exists.',
       '',
     );
+  }
+
+  // --- hook profile ---
+  // The engine's structural measurements of the contract, rendered where a
+  // reader asks "what did the tool look at" rather than among the findings:
+  // the profile is a description, and listing it under Findings would read as
+  // a defect with nothing to fix.
+  const profile = findings.find((f) => f.ruleClass === 'hook-profile');
+  if (profile) {
+    out.push('### Hook profile', '');
+    out.push('| Metric | Value |', '| --- | --- |');
+    const callbacks = (profile.callbacks as string[] | undefined) ?? [];
+    if (callbacks.length > 0) out.push(`| Callbacks implemented | ${callbacks.map((c) => `\`${c}\``).join(', ')} |`);
+    for (const [name, value] of Object.entries((profile.metrics as Record<string, unknown>) ?? {})) {
+      out.push(`| ${PROFILE_METRIC_LABEL[name] ?? name} | ${String(value)} |`);
+    }
+    const permissions = profile.permissions as Record<string, boolean> | undefined;
+    if (permissions) {
+      const declared = Object.entries(permissions)
+        .filter(([, on]) => on)
+        .map(([name]) => `\`${name}\``);
+      out.push(`| Permissions declared | ${declared.length > 0 ? declared.join(', ') : 'none'} |`);
+    }
+    out.push('', 'Complexity is derived from these metrics; the rule that fired is in the score table’s evidence.', '');
   }
 
   // --- score ---
@@ -446,16 +564,19 @@ export function renderMarkdown(manifest: Manifest): string {
 
   // --- findings ---
   out.push('## Findings', '');
-  if (findings.length === 0) {
+  const listed = findings.filter((f) => f.ruleClass !== 'hook-profile');
+  if (listed.length === 0) {
     out.push('None.', '');
   } else {
-    for (const f of findings) {
+    for (const f of listed) {
       const severity = f.severity as Severity;
       const corroborated = (f.engines as unknown[]).length > 1;
       out.push(
         `### ${SEVERITY_ICON[severity]} ${f.title}`,
         '',
-        `\`${f.ruleClass}\` · **${severity}** · confidence **${f.confidence}**` +
+        `\`${f.ruleClass}\`` +
+          (f.discriminator ? ` (\`${f.discriminator}\`)` : '') +
+          ` · **${severity}** · confidence **${f.confidence}**` +
           (corroborated ? ' · **corroborated by multiple engines**' : ''),
         '',
       );
@@ -510,10 +631,24 @@ export function renderMarkdown(manifest: Manifest): string {
   out.push('| Engine | Status | Findings | Notes |', '| --- | --- | --- | --- |');
   for (const e of engines) {
     out.push(
-      `| ${e.displayName ?? e.engine} | ${e.status} | ${e.findingCount ?? 0} | ${e.reason ?? ''} |`,
+      `| ${e.displayName ?? e.engine} | ${e.status}${e.errorCode ? ` (${e.errorCode})` : ''} | ${e.findingCount ?? 0} | ${e.reason ?? ''} |`,
     );
   }
   out.push('');
+
+  const observations = coverage.observations as HarnessObservations | undefined;
+  if (observations) {
+    const n = (key: keyof HarnessObservations): number => observations[key] ?? 0;
+    out.push(
+      `The harness executed ${n('swapsExecuted')} swap(s) (${n('swapsCompared')} compared against the ` +
+        `reference pool, ${n('swapsSkipped')} skipped), opened ${n('positionsOpened')} and closed ` +
+        `${n('positionsClosed')} position(s), made ${n('donations')} donation(s) and ran ` +
+        `${n('priceChecks')} price check(s)` +
+        (observations.sequences !== undefined ? ` over ${observations.sequences} sequence(s)` : '') +
+        '. An invariant with no relevant observations is reported inconclusive, not passed.',
+      '',
+    );
+  }
 
   const uncovered = (coverage.uncoveredFunctions ?? []) as UncoveredFunction[];
   if (uncovered.length > 0) {

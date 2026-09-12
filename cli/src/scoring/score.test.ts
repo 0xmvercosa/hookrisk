@@ -9,6 +9,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, test } from 'node:test';
 
 import type { EngineResult, Finding, RuleClass } from '../types.js';
@@ -367,7 +370,7 @@ describe('deriveScoringInput', () => {
 
     assert.equal(complexity.source, 'unmeasured');
     assert.equal(complexity.value, undefined);
-    assert.ok(complexity.evidence?.[0]?.includes('no complexity metric'), complexity.evidence?.join(' '));
+    assert.ok(complexity.evidence?.[0]?.includes('no hook-profile for the target'), complexity.evidence?.join(' '));
 
     // Scoped to complexity: other dimensions are unmeasured for the reason they
     // always were (rule 2, a class with no detector yet), not for this one.
@@ -448,5 +451,176 @@ describe('deriveScoringInput', () => {
     const input = derive([], [engine('blocksec')]);
     assert.equal(input.dimensions.customMath!.source, 'unmeasured');
     assert.ok(input.dimensions.customMath!.evidence?.[0]?.includes('which did not run'));
+  });
+});
+
+// --------------------------------------------------------------------------- //
+// Complexity from the hook-profile metrics
+// --------------------------------------------------------------------------- //
+
+describe('complexity derived from hook-profile', () => {
+  const dimensionIds = rubric.dimensions.map((d) => d.id);
+  const hookrisk: EngineResult = { engine: 'hookrisk', version: 't', status: 'ok', findings: [], durationMs: 1 };
+
+  /** The engine-metadata contract's metrics object, every field present. */
+  const metrics = (overrides: Partial<Record<string, number | boolean>> = {}): Record<string, number | boolean> => ({
+    callbacksImplemented: 0,
+    callbacksDeclared: 0,
+    stateWritesInCallbacks: 0,
+    externalCallsInSwapPath: 0,
+    internalFunctionsReachableFromCallbacks: 0,
+    usesReturnsDelta: false,
+    hasOwnerOnlyFunctions: false,
+    ...overrides,
+  });
+
+  const profile = (m: Record<string, number | boolean>, overrides: Partial<Finding> = {}): Finding => ({
+    id: 'hook-profile-id',
+    ruleClass: 'hook-profile',
+    title: 'Hook profile',
+    description: 'd',
+    severity: 'info',
+    confidence: 'high',
+    location: { file: 'src/MyHook.sol', line: 10 },
+    evidence: [],
+    engines: [{ engine: 'hookrisk', nativeRule: 'hookrisk-hook-profile', severity: 'info', confidence: 'high' }],
+    metrics: m,
+    ...overrides,
+  });
+
+  const complexityOf = (findings: Finding[], declared = {}, contractName?: string) =>
+    deriveScoringInput({ findings, engineResults: [hookrisk], declared, dimensionIds, contractName }).dimensions
+      .complexity!;
+
+  // One case per bracket of the rubric's rule table, so a change to the table
+  // that moves a boundary fails here and names the bracket.
+  const brackets: Array<[number, string, Record<string, number | boolean>]> = [
+    [0, 'no callbacks implemented', metrics()],
+    [1, 'two callbacks, no state writes', metrics({ callbacksImplemented: 2, callbacksDeclared: 2 })],
+    [2, 'state writes in callbacks', metrics({ callbacksImplemented: 1, stateWritesInCallbacks: 3 })],
+    [2, 'three callbacks, no state writes', metrics({ callbacksImplemented: 3 })],
+    [3, 'returns-delta alone', metrics({ callbacksImplemented: 1, usesReturnsDelta: true })],
+    [3, 'external call in the swap path alone', metrics({ callbacksImplemented: 2, externalCallsInSwapPath: 1 })],
+    [4, 'returns-delta and an external call', metrics({ callbacksImplemented: 4, usesReturnsDelta: true, externalCallsInSwapPath: 2 })],
+    [5, 'both plus an owner-only surface', metrics({ callbacksImplemented: 4, usesReturnsDelta: true, externalCallsInSwapPath: 2, hasOwnerOnlyFunctions: true })],
+  ];
+
+  for (const [expected, label, m] of brackets) {
+    test(`scores ${expected} for ${label}`, () => {
+      const complexity = complexityOf([profile(m)]);
+      assert.equal(complexity.source, 'measured');
+      assert.equal(complexity.value, expected);
+      assert.ok(complexity.evidence?.some((e) => e.startsWith('hook-profile metrics:')), complexity.evidence?.join(' | '));
+      assert.ok(complexity.evidence?.some((e) => e.includes('interpretation')), 'the evidence says the mapping is ours');
+
+      const scored = score(deriveScoringInput({ findings: [profile(m)], engineResults: [hookrisk], declared: {}, dimensionIds }), rubric);
+      const dimension = scored.dimensions.find((d) => d.id === 'complexity')!;
+      assert.equal(dimension.value, expected);
+      assert.equal(dimension.bracketsAreInterpretation, true);
+      assert.ok(dimension.bracketLabel, 'a measured value carries its bracket label');
+    });
+  }
+
+  test('an owner-only surface without returns-delta and an external call does not reach 5', () => {
+    // The 5 rule is conjunctive; the admin surface alone is HS-03's business.
+    const complexity = complexityOf([profile(metrics({ callbacksImplemented: 2, hasOwnerOnlyFunctions: true }))]);
+    assert.equal(complexity.value, 1);
+  });
+
+  test('a measured 0 is possible from a profile, never from silence', () => {
+    // The whole point of the profile: the engine looked, counted, and found
+    // no callback. That is the only way complexity can be measured 0.
+    assert.equal(complexityOf([profile(metrics())]).value, 0);
+    assert.equal(complexityOf([]).source, 'unmeasured');
+  });
+
+  test('without a profile the dimension is unmeasured and says why', () => {
+    const complexity = complexityOf([]);
+    assert.equal(complexity.source, 'unmeasured');
+    assert.ok(complexity.evidence?.[0]?.includes('no hook-profile for the target'), complexity.evidence?.join(' '));
+  });
+
+  test('HS-01 / HS-02 only raise the profile value to a floor of 1, never replace it', () => {
+    const divergence: Finding = {
+      id: 'hs02',
+      ruleClass: 'flag-implementation-divergence',
+      title: 'divergence',
+      description: 'd',
+      severity: 'high',
+      confidence: 'medium',
+      location: { file: 'src/MyHook.sol', line: 18 },
+      evidence: [],
+      engines: [{ engine: 'hookrisk', nativeRule: 'hookrisk-flag-divergence', severity: 'high', confidence: 'medium' }],
+    };
+    // Profile says 3; the floor must not pull it down to 1.
+    const three = complexityOf([profile(metrics({ callbacksImplemented: 1, usesReturnsDelta: true })), divergence]);
+    assert.equal(three.value, 3);
+    assert.ok(three.evidence?.some((e) => e.includes('flag-implementation-divergence finding')));
+    // Profile alone says 0 for a contract HS-02 fired on (declared but not
+    // implemented callbacks): the floor still applies.
+    const floored = complexityOf([profile(metrics({ callbacksDeclared: 2 })), divergence]);
+    assert.equal(floored.value, 1);
+  });
+
+  test('a declared value still wins, and a lower declaration is called out', () => {
+    const complexity = complexityOf([profile(metrics({ callbacksImplemented: 4, usesReturnsDelta: true, externalCallsInSwapPath: 1 }))], {
+      complexity: 2,
+    });
+    assert.equal(complexity.source, 'declared');
+    assert.equal(complexity.value, 2);
+    const note = complexity.evidence?.find((e) => e.includes('hookrisk measured 4; hookrisk.toml declares 2.'));
+    assert.ok(note, complexity.evidence?.join(' | '));
+    assert.ok(note!.includes('The declaration is lower than the measurement.'));
+  });
+
+  test('metrics carried on the engine attribution detail are read too', () => {
+    // The adapter may hang the payload on `detail` rather than `metrics`; the
+    // scorer accepts either so the two halves of the contract land independently.
+    const viaDetail = profile(metrics(), { metrics: undefined });
+    viaDetail.engines[0]!.detail = { metrics: metrics({ callbacksImplemented: 3 }) };
+    assert.equal(complexityOf([viaDetail]).value, 2);
+  });
+
+  test('a profile without metrics leaves complexity unmeasured with the reason', () => {
+    const complexity = complexityOf([profile(metrics(), { metrics: undefined })]);
+    assert.equal(complexity.source, 'unmeasured');
+    assert.ok(complexity.evidence?.some((e) => e.includes('carried no metrics')), complexity.evidence?.join(' | '));
+  });
+
+  test('metrics that match no rule leave complexity unmeasured rather than defaulting', () => {
+    // `callbacksImplemented` missing: neither the 0 nor the 1 rule can hold.
+    const complexity = complexityOf([profile({ usesReturnsDelta: false })]);
+    assert.equal(complexity.source, 'unmeasured');
+    assert.ok(complexity.evidence?.some((e) => e.includes('matched no derivation rule')), complexity.evidence?.join(' | '));
+  });
+
+  test('the target contract picks its profile when the file holds several', () => {
+    const base = profile(metrics({ callbacksImplemented: 1 }), { id: 'base', discriminator: 'BaseHookMock', location: { file: 'src/MyHook.sol', line: 5 } });
+    const target = profile(metrics({ callbacksImplemented: 4, usesReturnsDelta: true }), { id: 'target', discriminator: 'MyHook', location: { file: 'src/MyHook.sol', line: 40 } });
+
+    assert.equal(complexityOf([base, target], {}, 'MyHook').value, 3);
+    assert.equal(complexityOf([base, target], {}, 'BaseHookMock').value, 1);
+
+    // No name to go on: the first wins and the evidence admits the choice.
+    const ambiguous = complexityOf([base, target]);
+    assert.equal(ambiguous.value, 1);
+    assert.ok(ambiguous.evidence?.[0]?.includes('2 hook-profile classifications'), ambiguous.evidence?.join(' | '));
+  });
+
+  test('the profile fires no trigger evidence and stays a classification', () => {
+    const input = deriveScoringInput({ findings: [profile(metrics({ callbacksImplemented: 4, usesReturnsDelta: true }))], engineResults: [hookrisk], declared: {}, dimensionIds });
+    assert.deepEqual(input.evidence, [], 'usesReturnsDelta is a metric, not the custom-accounting finding');
+  });
+
+  test('the rubric refuses a derivation rule that names an unknown metric', () => {
+    const broken = structuredClone(rubric);
+    broken.dimensions.find((d) => d.id === 'complexity')!.derivation!.rules.push({ score: 2, when: 'branchesOnState >= 1', rationale: 'x' });
+    const path = join(tmpdir(), `hookrisk-rubric-${process.pid}.json`);
+    writeFileSync(path, JSON.stringify(broken));
+    try {
+      assert.throws(() => loadRubric(path), /unknown metric 'branchesOnState'/);
+    } finally {
+      rmSync(path, { force: true });
+    }
   });
 });

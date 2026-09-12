@@ -163,6 +163,8 @@ export interface Finding {
   permissions?: Record<string, boolean>;
   /** Per-contract measurements, on a `hook-profile` finding. */
   metrics?: Record<string, number | boolean>;
+  /** Implemented callback names, present on `hook-profile` findings only. */
+  callbacks?: string[];
 }
 
 /** Outcome of one engine run. */

@@ -43,6 +43,13 @@ export interface GatePolicy {
   maxSeverity?: 'info' | 'low' | 'medium' | 'high' | 'critical';
   /** Fail when static analysis could not examine every function. */
   failOnPartialCoverage?: boolean;
+  /**
+   * Fail when the tier is undetermined and only its *upper* bound exceeds
+   * `maxTier`. Off by default: with most dimensions unmeasured the upper bound
+   * is High on every hook, and a gate that fails on the tool's own gaps gates
+   * nothing. On, it is the strict posture — "unknown is not a pass".
+   */
+  failOnInconclusive?: boolean;
 }
 
 /** How the differential harness should construct the hook. */
@@ -293,6 +300,16 @@ export function fromDocument(document: TomlDocument, sourcePath?: string): Hookr
   if (gateTable.failOnPartialCoverage !== undefined) {
     gate.failOnPartialCoverage = Boolean(gateTable.failOnPartialCoverage);
   }
+  if (gateTable.failOnInconclusive !== undefined) {
+    // Strictly a boolean. `"false"` is truthy, and a gate policy silently read
+    // as its opposite is exactly the kind of misparse this file refuses.
+    if (typeof gateTable.failOnInconclusive !== 'boolean') {
+      throw new HookriskError('HR-E101', {
+        detail: `[gate] failOnInconclusive must be true or false, got ${JSON.stringify(gateTable.failOnInconclusive)}.`,
+      });
+    }
+    gate.failOnInconclusive = gateTable.failOnInconclusive;
+  }
 
   const engines: Record<string, boolean> = {};
   for (const [key, value] of Object.entries(enginesTable)) {
@@ -389,15 +406,28 @@ maxFeeBips = 0
 
 [gate]
 
-# Fail CI above this tier. Omit to report without gating.
-maxTier = "medium"
+# Fail CI when the measured tier is above this one. Commented out on purpose:
+# hookrisk measures three of the nine dimensions today, so on most hooks the
+# tier is a range (the report says "between Low and High") and a tier gate
+# would be gating the tool's coverage, not your hook. Uncomment once the
+# declared and measured dimensions leave the tier determined, or set
+# failOnInconclusive below to make the range itself a failure.
+# maxTier = "medium"
 
-# Fail CI on any finding at or above this severity.
+# Fail CI on any finding at or above this severity. Classifications (INFO
+# findings that describe the hook rather than accuse it) never count.
 maxSeverity = "high"
 
 # Fail when static analysis could not examine every function (HR-E205).
 # Right for a release gate on your own hook; too strict for third-party code.
 failOnPartialCoverage = false
+
+# Fail when the tier is undetermined and only its upper bound exceeds maxTier.
+# Six of the nine dimensions have no detector yet, so with this off an
+# undetermined tier passes the tier gate and the report says why. true is the
+# strict posture: unknown is not a pass, and you declare the unmeasured
+# dimensions in [declared] until the range closes.
+failOnInconclusive = false
 
 [engines]
 

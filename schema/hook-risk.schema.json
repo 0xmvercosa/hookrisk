@@ -126,6 +126,10 @@
           "$ref": "#/$defs/permissionSet",
           "description": "What the differential harness deployed the hook under. Read from getHookPermissions() on the compiled runtime code when the source declaration is inherited, otherwise the flags the CLI supplied; either way, the set the PoolManager obeyed during the run."
         },
+        "fromEngine": {
+          "$ref": "#/$defs/permissionSet",
+          "description": "The getHookPermissions() set the static engine resolved, inheritance followed, as carried by the target's hook-profile classification. Unlike `fromSource` it does not depend on the declaration being in the target file."
+        },
         "harnessRun": {
           "type": "object",
           "description": "The harness's own account of its setUp, from the run record it writes once the twin pools are built.",
@@ -538,6 +542,11 @@
           "reason": {
             "type": "string"
           },
+          "errorCode": {
+            "type": "string",
+            "pattern": "^HR-E[0-9]{3}$",
+            "description": "Catalogue code (errors/catalog.json) when status is `failed`, so a CI job can branch on the class of failure without parsing `reason`."
+          },
           "findingCount": {
             "type": "integer"
           },
@@ -603,6 +612,28 @@
             "failed"
           ],
           "description": "Mirrors the harness engine row. `failed` means the harness started and could not complete (setUp reverted, forge crashed); the invariants are then `inconclusive`, not `passed`."
+        },
+        "observations": {
+          "type": "object",
+          "description": "What the harness actually did, summed over every completed fuzz sequence (harness/out/hookrisk-obs-<RUN_ID>.jsonl). `hookedSwapReverted` is the number of sequences in which the hooked pool's swap reverted while the reference pool's did not. An invariant that passed with zero relevant observations is reported `inconclusive`, and these counts are how a reader checks that.",
+          "additionalProperties": false,
+          "properties": {
+            "swapsExecuted": { "type": "integer", "minimum": 0 },
+            "swapsCompared": { "type": "integer", "minimum": 0 },
+            "swapsSkipped": { "type": "integer", "minimum": 0 },
+            "hookedSwapReverted": { "type": "integer", "minimum": 0 },
+            "positionsOpened": { "type": "integer", "minimum": 0 },
+            "positionsClosed": { "type": "integer", "minimum": 0 },
+            "donations": { "type": "integer", "minimum": 0 },
+            "priceChecks": { "type": "integer", "minimum": 0 },
+            "monotonicityViolations": { "type": "integer", "minimum": 0 },
+            "exitFailures": { "type": "integer", "minimum": 0 },
+            "sequences": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Fuzz sequences the counts were summed over."
+            }
+          }
         }
       }
     },
@@ -624,8 +655,19 @@
         "maxSeverity": {
           "$ref": "#/$defs/severity"
         },
+        "failOnInconclusive": {
+          "type": "boolean",
+          "description": "Whether an undetermined tier whose upper bound exceeds maxTier fails the gate. Off, the gate fails on the measured lower bound only and records the range under `notes`."
+        },
         "failures": {
           "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "description": "What the gate deliberately did not fail on — an undetermined tier under failOnInconclusive = false, say — so a pass can be read together with what it could not rule out.",
           "items": {
             "type": "string"
           }
@@ -728,9 +770,10 @@
             "custom-accounting",
             "rounding-direction",
             "callback-intentionally-disabled",
-            "unsupported-hook-abi"
+            "unsupported-hook-abi",
+            "hook-profile"
           ],
-          "description": "Canonical taxonomy shared across engines, so the same defect found by two tools is one finding rather than two. `callback-intentionally-disabled` and `unsupported-hook-abi` are classifications (INFO): a callback overridden with a deliberate revert to disable a PoolManager-routed operation, and a contract that looks like a v4 hook but uses an ABI hookrisk cannot analyse."
+          "description": "Canonical taxonomy shared across engines, so the same defect found by two tools is one finding rather than two. `callback-intentionally-disabled`, `unsupported-hook-abi` and `hook-profile` are classifications (INFO): a callback overridden with a deliberate revert to disable a PoolManager-routed operation; a contract that looks like a v4 hook but uses an ABI hookrisk cannot analyse; and the engine's structural profile of one analysed hook contract, carrying `metrics`, `callbacks` and `permissions`, from which Complexity is derived."
         },
         "title": {
           "type": "string"
@@ -835,6 +878,27 @@
         "discriminator": {
           "type": "string",
           "description": "Distinguishes findings of one class anchored on the same element, e.g. the permission field for HS-02 or the callback name for HS-01."
+        },
+        "metrics": {
+          "type": "object",
+          "description": "Structural measurements, on `hook-profile` findings only. Names follow the engine-metadata contract (schema/engine-metadata.schema.json); values are counts or booleans, never nested, because the rubric's derivation rules are evaluated over them.",
+          "additionalProperties": {
+            "type": [
+              "integer",
+              "boolean"
+            ]
+          }
+        },
+        "callbacks": {
+          "type": "array",
+          "description": "Implemented callback names, on `hook-profile` findings only.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "permissions": {
+          "$ref": "#/$defs/permissionSet",
+          "description": "The resolved getHookPermissions() set, on `hook-profile` findings when the contract declares one (inheritance followed)."
         }
       }
     }

@@ -41,9 +41,10 @@ MEDIUM risk  10/33  (undetermined: up to 22/33)
   ! 4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk.
 ```
 
-The gate treats an undetermined tier as a failure when the upper bound exceeds
-the threshold. A gate that passed an unknown would be asserting something it does
-not know.
+Whether an undetermined tier fails the gate is a policy choice
+(`failOnInconclusive`, see [The gate](#the-gate)). By default the gate fails on
+what was *measured* and records the range it could not rule out; the strict
+posture fails on the range itself.
 
 ### 2. A dimension is scored 0 only if someone looked
 
@@ -88,14 +89,62 @@ customMath  —  unmeasured
 
 #### Some dimensions cannot be measured by silence at all
 
-Complexity is the case today. HS-01 and HS-02 prove a hook has callbacks with
+Complexity is the case. HS-01 and HS-02 prove a hook has callbacks with
 non-trivial structure, so when either fires the dimension gets a **floor of 1**.
-When neither fires, nothing hookrisk runs can tell a genuinely pass-through hook
-from a complex one whose callbacks happen to be guarded and correctly declared —
-which is what every well-written hook looks like. Complexity is therefore
-`unmeasured` when the detectors are silent, never `measured: 0`, and the
-evidence says why: hookrisk has no complexity metric yet. Declare it in
-`hookrisk.toml` to score it.
+When neither fires, nothing those detectors do can tell a genuinely pass-through
+hook from a complex one whose callbacks happen to be guarded and correctly
+declared — which is what every well-written hook looks like. Complexity is
+therefore never `measured: 0` from silence. It is measured from evidence that
+*counts* rather than accuses: the `hook-profile` classification.
+
+#### Complexity from the hook profile
+
+The static engine emits one INFO `hook-profile` classification per analysed
+hook contract — its "I looked at this contract" signal — carrying structural
+metrics: `callbacksImplemented`, `callbacksDeclared`, `stateWritesInCallbacks`,
+`externalCallsInSwapPath`, `internalFunctionsReachableFromCallbacks`,
+`usesReturnsDelta`, `hasOwnerOnlyFunctions`, plus the implemented callback
+names and the resolved permission set. The profile never fails a gate and
+never scores by itself.
+
+The scoring layer derives Complexity (0–5) from those metrics with a rule table
+that lives **in the rubric**, not in code
+(`schema/framework-rubric.json`, dimension `complexity`, key `derivation`,
+marked `interpretation: true` with a rationale per rule). Rules are tried
+highest score first; the first whose condition holds wins:
+
+| Score | When | Reading of the framework's prose |
+|---|---|---|
+| 5 | returns-delta **and** an external call in the swap path **and** an owner-only surface | every source of "multi-step flows" and "configuration patterns" at once |
+| 4 | returns-delta **and** an external call in the swap path | two interacting flows, not one |
+| 3 | returns-delta **or** an external call in the swap path | the callback's effect is not local to itself |
+| 2 | state written in callbacks, **or** 3+ callbacks | "branching logic" and "number of callbacks" |
+| 1 | 1–2 callbacks, no state written | observers and pass-through guards |
+| 0 | no callback implemented | pass-through by construction |
+
+The conditions use the same tiny grammar as requirement guards
+(`name OP number`, bare boolean names, `&&`/`||`, left to right, no
+parentheses), so the rubric has one condition language. The loader refuses a
+rule that names a metric the profile does not carry or scores outside the
+dimension's range.
+
+Three properties worth stating:
+
+- **A measured 0 exists, and only this way.** A profile with
+  `callbacksImplemented = 0` is the engine saying it counted and found none.
+  No profile → `unmeasured`, with the reason in the evidence.
+- **The HS-01/HS-02 floor still applies**, and only raises. A profile that
+  scores 3 is not pulled down to 1 by a divergence finding; a profile that
+  scores 0 on a contract HS-02 fired on is lifted to 1.
+- **A declaration still wins.** `complexity = 2` in `hookrisk.toml` over a
+  measured 4 is recorded as declared, with
+  `hookrisk measured 4; hookrisk.toml declares 2. The declaration is lower than
+  the measurement.` in the evidence.
+
+The manifest carries the metrics on the profile finding (`findings[].metrics`,
+`callbacks`, `permissions`) and `HOOK_RISK.md` renders them as a "Hook profile"
+table under *What was assessed*; the rule that fired is in the score table's
+evidence.
 
 ### 3. Measured and declared are different claims
 
@@ -115,7 +164,7 @@ rather than guess.
 
 | Dimension | Range | How hookrisk gets it |
 |---|---|---|
-| Complexity | 0–5 | Floor of 1 when HS-01/HS-02 fire; otherwise **unmeasured** — no dedicated metric yet, and silence is not 0 |
+| Complexity | 0–5 | Derived from the `hook-profile` metrics by the rubric's rule table; HS-01/HS-02 add a floor of 1; no profile → **unmeasured**, silence is not 0 |
 | Custom math | 0–5 | Measured — from custom-accounting and rounding findings |
 | External dependencies | 0–3 | Needs HS-05 (not implemented) → unmeasured |
 | External liquidity exposure | 0–3 | Never measured → declared or unmeasured |
@@ -205,13 +254,14 @@ The test pins the shortfall rather than hiding it, so if the Foundation tightens
 
 ## The gate
 
-Configured in `hookrisk.toml`:
+Configured in `hookrisk.toml`. This is what `hookrisk init` writes:
 
 ```toml
 [gate]
-maxTier = "medium"
+# maxTier = "medium"          # opt in once the tier is determined for your hook
 maxSeverity = "high"
 failOnPartialCoverage = false
+failOnInconclusive = false    # true is the strict posture
 ```
 
 Exit code `2` means the scan completed and the gate did not pass. That is
@@ -225,5 +275,31 @@ a pattern resembling a bug, but an executed sequence in which the hook
 demonstrably misbehaved. A gate weighing a reproducible counterexample against a
 numeric threshold could pass a hook that provably traps liquidity, and that is
 not a trade-off worth offering.
+
+**A classification never breaches `maxSeverity`.** `custom-accounting`,
+`callback-intentionally-disabled`, `unsupported-hook-abi` and `hook-profile`
+describe the hook; they are INFO and are not counted as findings by the gate.
+
+### The tier gate is a deliberate choice
+
+Six of the nine dimensions have no detector yet. On nearly every hook the tier
+is therefore a range whose upper bound is High — including the official v4
+template, which used to fail the default `maxTier = "medium"` on nothing but
+hookrisk's own coverage. A gate that fails every scan gates nothing, so the
+rule is now:
+
+| Situation | `failOnInconclusive = false` (default) | `= true` |
+|---|---|---|
+| Measured lower bound above `maxTier` | **fails** | **fails** |
+| Lower bound within, upper bound above `maxTier` | passes, with a `gate.notes` entry naming the unmeasured dimensions | **fails** |
+| Upper bound within `maxTier` | passes | passes |
+| `maxTier` unset | not gated | not gated |
+
+The note is rendered next to the verdict in `HOOK_RISK.md` and carried in the
+manifest (`gate.notes`, `gate.failOnInconclusive`), so a pass can always be read
+together with what it could not rule out. `hookrisk init` leaves `maxTier`
+commented out with this explanation; declare the unmeasured dimensions in
+`[declared]` to close the range, or set `failOnInconclusive = true` for the
+strict posture in which unknown is not a pass.
 
 [`manifest.ts`](../cli/src/manifest.ts) · `evaluateGate`

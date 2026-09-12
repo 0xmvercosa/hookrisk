@@ -44,6 +44,31 @@ export interface Dimension {
   bracketsAreInterpretation: boolean;
   interpretationNote?: string;
   brackets: Bracket[];
+  /**
+   * How a measured value is derived from an engine classification's metrics,
+   * when the dimension has one. Kept in the rubric rather than in code for the
+   * same reason the brackets are: the mapping is an interpretation, and a
+   * reviewer should be able to audit it without reading TypeScript.
+   */
+  derivation?: Derivation;
+}
+
+/** One rule of a {@link Derivation}: the first rule whose `when` holds wins. */
+export interface DerivationRule {
+  score: number;
+  /** Same grammar as {@link Requirement.condition}, evaluated over the metrics. */
+  when: string;
+  rationale: string;
+}
+
+export interface Derivation {
+  /** True when the metric-to-score mapping is hookrisk's reading, not the framework's. */
+  interpretation: boolean;
+  /** Rule class of the classification that carries the metrics, e.g. `hook-profile`. */
+  source: string;
+  /** Metric names the rules may reference. */
+  metrics: string[];
+  rules: DerivationRule[];
 }
 
 export interface Requirement {
@@ -138,6 +163,7 @@ function validate(rubric: Rubric, source: string): void {
         fail(`dimension '${dimension.id}' has no bracket for score ${expected}`);
       }
     }
+    if (dimension.derivation) validateDerivation(dimension, fail);
   }
 
   // Tiers must tile the whole range with no gap and no overlap, or some totals
@@ -170,6 +196,28 @@ function validate(rubric: Rubric, source: string): void {
     for (const requirement of tier.baseline) {
       if (!rubric.actions[requirement.action]) {
         fail(`tier '${tier.id}' references unknown action '${requirement.action}'`);
+      }
+    }
+  }
+}
+
+/**
+ * A derivation rule that scores outside the dimension's range, or names a
+ * metric the source classification does not carry, would produce a measured
+ * value nothing can explain. Both are rubric bugs, so both refuse to load.
+ */
+function validateDerivation(dimension: Dimension, fail: (message: string) => never): void {
+  const derivation = dimension.derivation!;
+  if (!derivation.rules?.length) fail(`dimension '${dimension.id}' has a derivation with no rules`);
+  const known = new Set(derivation.metrics ?? []);
+  for (const rule of derivation.rules) {
+    if (!Number.isInteger(rule.score) || rule.score < dimension.min || rule.score > dimension.max) {
+      fail(`dimension '${dimension.id}' derivation rule scores ${rule.score}, outside ${dimension.min}-${dimension.max}`);
+    }
+    if (!rule.when?.trim()) fail(`dimension '${dimension.id}' derivation rule for ${rule.score} has no condition`);
+    for (const name of rule.when.match(/[A-Za-z_]\w*/g) ?? []) {
+      if (!known.has(name)) {
+        fail(`dimension '${dimension.id}' derivation rule for ${rule.score} references unknown metric '${name}'`);
       }
     }
   }

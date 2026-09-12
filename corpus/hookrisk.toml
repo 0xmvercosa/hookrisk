@@ -35,25 +35,28 @@ maxFeeBips = 100
 
 [gate]
 
-# Fail CI above this tier. Omit to report without gating.
-# "high", not "medium", and the reason is worth stating.
+# Fail CI when the measured tier is above this one.
 #
 # The corpus is a fixture project scanned with most detectors unimplemented, so
 # several dimensions come back unmeasured and the tier is legitimately a range
-# from Low to High. Gating on tier here would fail every scan on a gap in
-# hookrisk rather than on anything about the hook — which is the tool refusing
-# to certify what it has not measured, working exactly as designed.
-#
-# maxSeverity still discriminates: the clean hook has no findings and passes,
-# the unguarded-callback fixture has six high ones and does not.
-maxTier = "high"
+# from Low to High. With failOnInconclusive off (below) the gate fails on the
+# measured lower bound only and records the range in gate.notes, so "medium"
+# gates what the tool knows without failing every scan on what it does not.
+maxTier = "medium"
 
-# Fail CI on any finding at or above this severity.
+# Fail CI on any finding at or above this severity. This is what discriminates
+# on the corpus: the clean hook has no findings and passes, the
+# unguarded-callback fixture has six high ones and does not.
 maxSeverity = "high"
 
 # Fail when static analysis could not examine every function (HR-E205).
 # Right for a release gate on your own hook; too strict for third-party code.
 failOnPartialCoverage = false
+
+# Fail when the tier is undetermined and only its upper bound exceeds maxTier.
+# Off here on purpose: the fixtures demonstrate the detectors, not a release
+# posture. true is the strict setting — unknown is not a pass.
+failOnInconclusive = false
 
 [engines]
 
