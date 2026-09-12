@@ -26,7 +26,7 @@ tvlPotential = 0
 # Invariant I2 asserts output never falls short of an unhooked pool by more
 # than this. Setting it to 0 is a much stronger claim, and hookrisk will hold
 # you to it.
-maxFeeBips = 10
+maxFeeBips = 0
 
 # Any dimension hookrisk measures can be overridden here. The manifest records
 # the override and keeps the measured value alongside it, so a reader can see
@@ -35,15 +35,28 @@ maxFeeBips = 10
 
 [gate]
 
-# Fail CI above this tier. Omit to report without gating.
-maxTier = "medium"
+# Fail CI when the measured tier is above this one. Commented out on purpose:
+# hookrisk measures three of the nine dimensions today, so on most hooks the
+# tier is a range (the report says "between Low and High") and a tier gate
+# would be gating the tool's coverage, not your hook. Uncomment once the
+# declared and measured dimensions leave the tier determined, or set
+# failOnInconclusive below to make the range itself a failure.
+# maxTier = "medium"
 
-# Fail CI on any finding at or above this severity.
+# Fail CI on any finding at or above this severity. Classifications (INFO
+# findings that describe the hook rather than accuse it) never count.
 maxSeverity = "high"
 
 # Fail when static analysis could not examine every function (HR-E205).
 # Right for a release gate on your own hook; too strict for third-party code.
 failOnPartialCoverage = false
+
+# Fail when the tier is undetermined and only its upper bound exceeds maxTier.
+# Six of the nine dimensions have no detector yet, so with this off an
+# undetermined tier passes the tier gate and the report says why. true is the
+# strict posture: unknown is not a pass, and you declare the unmeasured
+# dimensions in [declared] until the range closes.
+failOnInconclusive = false
 
 [engines]
 
@@ -56,4 +69,14 @@ hookrisk = true
 blocksec = false
 
 [harness]
-constructorArgs = ["$poolManager", "$currency0", "$currency1", "$currency1"]
+
+# Constructor arguments for the differential harness, one string per ABI input.
+# Not needed when the constructor takes nothing or only the IPoolManager.
+# Placeholders are replaced with the harness's own deployment:
+#   $poolManager  $currency0  $currency1  $owner (the test contract)  $hook
+# Anything else is passed literally to `cast abi-encode`, so write values the
+# way cast accepts them (decimal integers, 0x-prefixed addresses and bytes).
+# constructorArgs = ["$poolManager", "3000", "$owner"]
+
+[harness]
+constructorArgs = ["$poolManager", "5"]

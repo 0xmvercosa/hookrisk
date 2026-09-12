@@ -49,7 +49,7 @@
     {
       "id": "88f79523919f0f64",
       "ruleClass": "hook-profile",
-      "title": "AntiSandwichMock (src/mocks/general/AntiSandwichMock.sol#15-50) is a recognised v4 hook: implements afterSwap, beforeSwap; declares 2 callback permission(s);...",
+      "title": "AntiSandwichMock (src/mocks/general/AntiSandwichMock.sol#15-50) is a recognised v4 hook: implements afterSwap, beforeSwap; declares 2 callback permission(s); …",
       "description": "AntiSandwichMock (src/mocks/general/AntiSandwichMock.sol#15-50) is a recognised v4 hook: implements afterSwap, beforeSwap; declares 2 callback permission(s); 6 state write(s) reachable from callbacks; 2 external call(s) in the swap path.",
       "severity": "info",
       "confidence": "high",
@@ -400,7 +400,7 @@
       "version": "0.11.6",
       "status": "ok",
       "findingCount": 2,
-      "durationMs": 7758
+      "durationMs": 9948
     },
     {
       "engine": "harness",
@@ -408,7 +408,7 @@
       "version": "1.7.1",
       "status": "ok",
       "findingCount": 0,
-      "durationMs": 5769
+      "durationMs": 6411
     }
   ],
   "coverage": {
@@ -434,14 +434,14 @@
     "dynamicAnalysisSkipped": false,
     "harnessStatus": "ok",
     "observations": {
-      "swapsExecuted": 13900,
-      "swapsCompared": 13900,
+      "swapsExecuted": 13450,
+      "swapsCompared": 13450,
       "swapsSkipped": 0,
       "hookedSwapReverted": 0,
-      "positionsOpened": 6690,
-      "positionsClosed": 6690,
-      "donations": 6710,
-      "priceChecks": 13900,
+      "positionsOpened": 7110,
+      "positionsClosed": 7110,
+      "donations": 6760,
+      "priceChecks": 13450,
       "monotonicityViolations": 0,
       "exitFailures": 0,
       "sequences": 1285
@@ -480,6 +480,7 @@
       "afterAddLiquidityReturnDelta": false,
       "afterRemoveLiquidityReturnDelta": false
     },
+    "disagreement": [],
     "harnessRun": {
       "flags": 196,
       "permissionsDerived": true,
@@ -516,11 +517,9 @@
   ],
   "gate": {
     "passed": true,
-    "maxTier": "medium",
     "maxSeverity": "high",
-    "failures": [],
-    "notes": [
-      "tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
-    ]
+    "failOnInconclusive": false,
+    "failOnNotAnalysed": true,
+    "failures": []
   }
 }

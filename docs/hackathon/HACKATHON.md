@@ -17,8 +17,9 @@ raw before/after scan artifacts are under `evidence/`; the demo itself is
 
 1. **It finds the Cork exploit.** On the archived `CorkHook` (the $11M
    May 2025 incident, fix never merged) HS-01 reports the unguarded
-   `beforeSwap` at line 365 that the attacker called directly, plus two more
-   unguarded callbacks and a genuinely stubbed `beforeRemoveLiquidity`.
+   `beforeSwap` at line 365 that the attacker called directly, plus the
+   unguarded `beforeInitialize`, a genuinely stubbed `beforeRemoveLiquidity`,
+   an owner-only fee surface and complexity 5/5.
    `evidence/cork-hook.md`.
 2. **It executes hooks, not only reads them.** The harness stands up two
    pools identical except for the hook, drives them with the same fuzzed
@@ -59,8 +60,8 @@ short version:
 | Harness skipped with an accurate, actionable reason | 6 (constructor arguments needed, or the project does not compile) |
 | False HIGHs | 0; each is now an INFO classification `callback-intentionally-disabled` |
 | Legacy-ABI hooks | INFO `unsupported-hook-abi`; every code-derived dimension unmeasured |
-| Complexity measured (from the hook profile) | 9 of 14; Cork scores 5/5 (returns-delta, swap-path external calls, owner-only surface) |
-| Gate | passes on 11, fails on the 3 with HIGH findings (was: failed on all 14 for an undetermined tier) |
+| Complexity measured (from the hook profile) | 10 of 15; Cork scores 5/5 (returns-delta, swap-path external calls, owner-only surface) |
+| Gate | passes on 7 measured hooks; fails on 3 with HIGH findings and on 5 that could not be analysed (`failOnNotAnalysed`); before, all 14 failed for an undetermined tier |
 | BlockSec | runs, corroborates HS-01 |
 
 Full table with per-hook links: `evidence/scans/README.md`.
@@ -152,6 +153,18 @@ emits one JSON line per event with a run id; the summary prints to stdout;
 missing; the dogfood workflow gained a third case asserting an unrunnable
 hook comes back inconclusive rather than clean.
 
+### Pass 3: what the re-scan found
+
+Fourteen agents re-scanned the hooks against the new build and filed 36
+wrong-claim reports and 42 gaps (`evidence/agent-scan-results-after.json`).
+The ones fixed the same day: HS-01 no longer double-counts an always-reverting
+callback as HIGH (Cork went from 4 to 3 HIGHs, all real); a disabled-callback
+classification inherited from a base contract is attributed to the hook that
+inherits it; a liquidity-only returns-delta is no longer scored as a custom
+curve; an engine failure or an unrecognised target fails the gate by default;
+the report's counts, wording, links and titles were corrected. What remains is
+listed in `RESUME.md`.
+
 ## Demo script
 
 ```bash
@@ -159,7 +172,7 @@ make setup && make test                        # everything green
 
 # 1. The exploit hook (clone of Cork-Technology/Cork-Hook, forge build first)
 node cli/dist/cli.js scan src/CorkHook.sol:CorkHook --verbose
-#   3× unprotected-hook-callback HIGH incl. beforeSwap:365; gate failed
+#   2× unprotected-hook-callback HIGH incl. beforeSwap:365, 1× HS-02 HIGH; gate failed
 
 # 2. A custom-curve hook the old harness silently "passed" with zero invariants
 #    (clone of saucepoint/v4-constant-sum)

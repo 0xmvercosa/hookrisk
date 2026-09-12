@@ -10,24 +10,22 @@ The archived repository (`Cork-Technology/Cork-Hook`, `main` @ 50e78ac) still co
 node cli/dist/cli.js scan src/CorkHook.sol:CorkHook --verbose
 ```
 
-- **high** `unprotected-hook-callback` at `src/CorkHook.sol:88` (`beforeAddLiquidity`)
-  CorkHook.beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/CorkHook.sol#88-95) is an IHooks callback (0x259982e5) that never ...
 - **high** `unprotected-hook-callback` at `src/CorkHook.sol:97` (`beforeInitialize`)
-  CorkHook.beforeInitialize(address,PoolKey,uint160) (src/CorkHook.sol#97-124) is an IHooks callback (0xdc98354e) that never compares msg.sender against poolMa...
+  CorkHook.beforeInitialize(address,PoolKey,uint160) (src/CorkHook.sol#97-124) is an IHooks callback (0xdc98354e) that never compares msg.sender against …
 - **high** `unprotected-hook-callback` at `src/CorkHook.sol:365` (`beforeSwap`)
-  CorkHook.beforeSwap(address,PoolKey,IPoolManager.SwapParams,bytes) (src/CorkHook.sol#365-378) is an IHooks callback (0x575e24b4) that never compares msg.send...
+  CorkHook.beforeSwap(address,PoolKey,IPoolManager.SwapParams,bytes) (src/CorkHook.sol#365-378) is an IHooks callback (0x575e24b4) that never compares …
 - **high** `flag-implementation-divergence` at `src/CorkHook.sol:31` (`beforeRemoveLiquidity`)
-  CorkHook (src/CorkHook.sol#31-734) declares permission `beforeRemoveLiquidity` (bit 9, BEFORE_REMOVE_LIQUIDITY_FLAG) but provides no working `beforeRemoveLiq...
+  CorkHook (src/CorkHook.sol#31-734) declares permission `beforeRemoveLiquidity` (bit 9, BEFORE_REMOVE_LIQUIDITY_FLAG) but provides no working …
 - **info** `custom-accounting` at `src/CorkHook.sol:31`
   CorkHook (src/CorkHook.sol#31-734) declares custom-accounting permissions: `beforeSwapReturnDelta` (bit 3)
 - **info** `callback-intentionally-disabled` at `src/CorkHook.sol:88` (`beforeAddLiquidity`)
-  CorkHook.beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/CorkHook.sol#88-95) overrides `beforeAddLiquidity` with `revert Di...
+  CorkHook.beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/CorkHook.sol#88-95) overrides `beforeAddLiquidity` with `revert …
 
-`beforeSwap` at line 365 is the callback the attacker invoked. HS-01 also reports `beforeInitialize` and `beforeAddLiquidity`, which lack the guard for the same reason.
+`beforeSwap` at line 365 is the callback the attacker invoked. HS-01 also reports `beforeInitialize`, unguarded for the same reason. `beforeAddLiquidity` is unguarded too, but its body is an unconditional revert (`DisableNativeLiquidityModification()`), so it has no reachable surface: it is classified as disabled by design rather than reported as HIGH.
 
 The `flag-implementation-divergence` at line 31 is a genuine second defect: the hook declares `beforeRemoveLiquidity` in `getHookPermissions()` but never overrides it, so `BaseHook`'s stub reverts `HookNotImplemented()` on every PoolManager-routed liquidity removal.
 
-Score after the fixes: **medium 14–26/33**, complexity measured 5/5 from the hook profile, gate failed on `4 finding(s) at or above high`. The harness is skipped honestly: the constructor takes `(IPoolManager, LiquidityToken lpBase, address owner)` and `beforeInitialize` clones `lpBase`, which the generic twin-pool fixture cannot supply.
+Score after the fixes: **medium 14–26/33**, complexity measured 5/5 from the hook profile, gate failed on `3 finding(s) at or above high`. The harness is skipped honestly: the constructor takes `(IPoolManager, LiquidityToken lpBase, address owner)` and `beforeInitialize` clones `lpBase`, which the generic twin-pool fixture cannot supply.
 
 ## Before the fixes (main @ db08091)
 

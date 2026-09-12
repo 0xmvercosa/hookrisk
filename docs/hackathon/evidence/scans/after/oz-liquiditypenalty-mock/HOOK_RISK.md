@@ -1,8 +1,8 @@
 # Hook Risk Report
 
-**MEDIUM risk** — 13/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
+**MEDIUM risk** — 12/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
 
-> **Tier is undetermined.** 13/33 from what could be measured, up to 25/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
+> **Tier is undetermined.** 12/33 from what could be measured, up to 24/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
 ✅ **Gate passed.**
 
@@ -10,8 +10,8 @@
 
 | | |
 | --- | --- |
-| Contract | `AntiSandwichMock` |
-| Source | `src/mocks/general/AntiSandwichMock.sol` |
+| Contract | `LiquidityPenaltyHookMock` |
+| Source | `src/mocks/general/LiquidityPenaltyHookMock.sol` |
 | Mode | source |
 
 ### Hook profile
@@ -20,12 +20,12 @@
 | --- | --- |
 | Callbacks implemented (working; deliberate revert-guards are listed as disabled) | 2 |
 | Callbacks declared | 2 |
-| State writes in callbacks | 6 |
-| External calls in the swap path | 2 |
-| Internal functions reachable from callbacks | 9 |
+| State writes in callbacks | 3 |
+| External calls in the swap path | 0 |
+| Internal functions reachable from callbacks | 13 |
 | Returns a delta | true |
 | Owner-only surface | false |
-| Permissions declared | `beforeSwap`, `afterSwap`, `afterSwapReturnDelta` |
+| Permissions declared | `afterAddLiquidity`, `afterRemoveLiquidity`, `afterAddLiquidityReturnDelta`, `afterRemoveLiquidityReturnDelta` |
 
 Complexity is derived from these metrics; the rule that fired is in the score table’s evidence.
 
@@ -33,7 +33,7 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 
 | Dimension | Score | Source | Bracket |
 | --- | --- | --- | --- |
-| Complexity | 4/5 | measured | Returns a delta and makes an external call in the swap path ᵃ |
+| Complexity | 3/5 | measured | Returns a delta, or makes an external call in the swap path ᵃ |
 | Custom math | 3/5 | measured | A custom curve or invariant function ᵃ |
 | External dependencies | — | unmeasured | _unmeasured_ ᵃ |
 | External liquidity exposure | — | unmeasured | _unmeasured_ ᵃ |
@@ -70,13 +70,13 @@ These apply regardless of the total score — the framework's own safeguard agai
 
 ## Findings
 
-### ℹ️ AntiSandwichMock (src/mocks/general/AntiSandwichMock.sol#15-50) declares custom-accounting permissions: `afterSwapReturnDelta` (bit 2)
+### ℹ️ LiquidityPenaltyHookMock (src/mocks/general/LiquidityPenaltyHookMock.sol#10-18) declares custom-accounting permissions: `afterAddLiquidityReturnDelta` (bit …
 
 `custom-accounting` · **info** · confidence **high**
 
-`src/mocks/general/AntiSandwichMock.sol:15`
+`src/mocks/general/LiquidityPenaltyHookMock.sol:10`
 
-AntiSandwichMock (src/mocks/general/AntiSandwichMock.sol#15-50) declares custom-accounting permissions: `afterSwapReturnDelta` (bit 2). The hook can alter settled amounts, which raises its risk tier under the framework's custom-math and price-impact triggers and means differential output comparison (invariant I2) does not apply — the harness substitutes price monotonicity.
+LiquidityPenaltyHookMock (src/mocks/general/LiquidityPenaltyHookMock.sol#10-18) declares custom-accounting permissions: `afterAddLiquidityReturnDelta` (bit 1), `afterRemoveLiquidityReturnDelta` (bit 0). The hook can alter settled amounts, which raises its risk tier under the framework's custom-math and price-impact triggers and is liquidity-side only: swaps still route through v4's pricing, so the harness keeps comparing swap output against the reference pool (invariant I2).
 
 Reported by: `hookrisk/hookrisk-custom-accounting`
 
@@ -95,7 +95,7 @@ Reported by: `hookrisk/hookrisk-custom-accounting`
 | hookrisk Slither detectors | ok | 2 |  |
 | Differential harness (Foundry) | ok | 0 |  |
 
-The harness executed 13450 swap(s) (13450 compared against the reference pool, 0 skipped), opened 7110 and closed 7110 position(s), made 6760 donation(s) and ran 13450 price check(s) over 1285 sequence(s). An invariant with no relevant observations is reported inconclusive, not passed.
+The harness executed 13510 swap(s) (13510 compared against the reference pool, 0 skipped), opened 6710 and closed 6710 position(s), made 6955 donation(s) and ran 13510 price check(s) over 1285 sequence(s). An invariant with no relevant observations is reported inconclusive, not passed.
 
 > ⚠️ **3 function(s) were not analysed.** Slither could not lift them to IR and continued silently. Findings below do not cover them — this is not the same as those functions being clean. See `HR-E205`.
 

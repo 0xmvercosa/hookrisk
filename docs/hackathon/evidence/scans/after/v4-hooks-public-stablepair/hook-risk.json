@@ -17,7 +17,7 @@
     {
       "id": "43523c48d3fde3fa",
       "ruleClass": "flag-implementation-divergence",
-      "title": "StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working `afterIni...",
+      "title": "StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working …",
       "description": "StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working `afterInitialize` implementation. The PoolManager will call it on every matching pool operation and the call will revert, making the pool unusable for that operation.",
       "severity": "high",
       "confidence": "medium",
@@ -43,9 +43,34 @@
       ]
     },
     {
+      "id": "0acb440f46048450",
+      "ruleClass": "callback-intentionally-disabled",
+      "title": "StablePairHook (src/stable/StablePairHook.sol#25-259) overrides `beforeInitialize` (inherited from BaseDynamicFeeHook._beforeInitialize) with `revert …",
+      "description": "StablePairHook (src/stable/StablePairHook.sol#25-259) overrides `beforeInitialize` (inherited from BaseDynamicFeeHook._beforeInitialize) with `revert InvalidInitializer()`, so PoolManager-routed pool initialisation is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports.",
+      "severity": "info",
+      "confidence": "high",
+      "location": {
+        "file": "src/stable/StablePairHook.sol",
+        "line": 25,
+        "endLine": 259
+      },
+      "discriminator": "beforeInitialize",
+      "evidence": [
+        "StablePairHook (src/stable/StablePairHook.sol#25-259) overrides `beforeInitialize` (inherited from BaseDynamicFeeHook._beforeInitialize) with `revert InvalidInitializer()`, so PoolManager-routed pool initialisation is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-disabled-callback",
+          "severity": "info",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
       "id": "b40a51c354277a90",
       "ruleClass": "hook-profile",
-      "title": "StablePairHook (src/stable/StablePairHook.sol#25-259) is a recognised v4 hook: implements afterAddLiquidity, afterSwap, beforeAddLiquidity, beforeSwap; decla...",
+      "title": "StablePairHook (src/stable/StablePairHook.sol#25-259) is a recognised v4 hook: implements afterAddLiquidity, afterSwap, beforeAddLiquidity, beforeSwap; …",
       "description": "StablePairHook (src/stable/StablePairHook.sol#25-259) is a recognised v4 hook: implements afterAddLiquidity, afterSwap, beforeAddLiquidity, beforeSwap; declares 6 callback permission(s); 1 state write(s) reachable from callbacks; 0 external call(s) in the swap path.",
       "severity": "info",
       "confidence": "high",
@@ -293,8 +318,8 @@
       "displayName": "hookrisk Slither detectors",
       "version": "0.11.6",
       "status": "ok",
-      "findingCount": 2,
-      "durationMs": 11470
+      "findingCount": 3,
+      "durationMs": 13576
     },
     {
       "engine": "harness",
@@ -304,7 +329,7 @@
       "reason": "harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).",
       "errorCode": "HR-E304",
       "findingCount": 0,
-      "durationMs": 170
+      "durationMs": 221
     }
   ],
   "coverage": {
@@ -485,13 +510,12 @@
   ],
   "gate": {
     "passed": false,
-    "maxTier": "medium",
     "maxSeverity": "high",
+    "failOnInconclusive": false,
+    "failOnNotAnalysed": true,
     "failures": [
-      "1 finding(s) at or above high: StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working `afterIni..."
-    ],
-    "notes": [
-      "tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (6 dimension(s) unmeasured: customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
+      "the differential harness failed: harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa13000000000000",
+      "1 finding(s) at or above high: StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working …"
     ]
   }
 }

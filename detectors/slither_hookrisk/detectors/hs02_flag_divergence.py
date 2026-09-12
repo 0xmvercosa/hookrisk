@@ -303,6 +303,19 @@ class CustomAccountingDeclared(HookriskDetector):
             return []
 
         described = ", ".join(f"`{field}` (bit {FLAG_BITS[FIELD_TO_FLAG[field]]})" for field in enabled)
+        swap_delta = any(field in ("beforeSwapReturnDelta", "afterSwapReturnDelta") for field in enabled)
+        # Only a swap-side delta makes the hook the market maker. A delta on a
+        # liquidity callback adjusts what an LP settles; swaps still route
+        # through v4's own math, so output comparison against the reference
+        # pool (I2) remains the right assertion.
+        consequence = (
+            "means differential output comparison (invariant I2) does not "
+            "apply — the harness substitutes price monotonicity.\n"
+            if swap_delta
+            else "is liquidity-side only: swaps still route through v4's pricing, "
+            "so the harness keeps comparing swap output against the reference "
+            "pool (invariant I2).\n"
+        )
         return [
             self._report(
                 [
@@ -310,8 +323,7 @@ class CustomAccountingDeclared(HookriskDetector):
                     f" declares custom-accounting permissions: {described}. "
                     "The hook can alter settled amounts, which raises its risk tier "
                     "under the framework's custom-math and price-impact triggers and "
-                    "means differential output comparison (invariant I2) does not "
-                    "apply — the harness substitutes price monotonicity.\n",
+                    + consequence,
                 ]
             )
         ]

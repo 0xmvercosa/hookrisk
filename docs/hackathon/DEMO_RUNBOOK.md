@@ -118,14 +118,14 @@ jq -r '.findings[]|"\(.severity)\t\(.ruleClass)\t\(.discriminator // "-")\tline 
 ```
 ```
 MEDIUM risk  14/33  (undetermined: up to 26/33)
-  findings    4 high, 3 info
+  findings    3 high, 2 info (+ hook profile)
   ✓ hookrisk   ok
   - harness    skipped  CorkHook's constructor takes 3 argument(s) (address
                _poolManager, address _lpBase, address owner) and the harness can
                only derive the IPoolManager on its own. … See HR-E305.
   invariants  I1 skipped, I2 skipped, I3 skipped
   gate failed
-    - 4 finding(s) at or above high: … CorkHook.beforeSwap(address,PoolKey,
+    - 3 finding(s) at or above high: … CorkHook.beforeSwap(address,PoolKey,
       IPoolManager.SwapParams,bytes) (src/CorkHook.sol#365-378) is an IHooks
       callback (0x575e24b4) that never compares msg.send...
 
@@ -238,7 +238,7 @@ dimensions and brackets for two; we derive it from a profile the detector emits,
 and the rule that fired is *data* in `schema/framework-rubric.json`, not code.
 Cork scores 5/5 on the same table.
 
-## Step 6 — A 2023-era hook: unreadable, and says so · 7–17 s, exit 0
+## Step 6 — A 2023-era hook: unreadable, and says so · 7–17 s, exit 2
 
 **Claim.** A hook on the pre-release ABI gets a classification and seven
 unmeasured dimensions, not a clean report.
@@ -265,6 +265,9 @@ LOW risk  3/33  (undetermined: up to 28/33)
   ✗ harness    failed  …
   invariants  I1 inconclusive, I2 inconclusive, I3 inconclusive
   ! 7 dimension(s) unmeasured: the tier is between Low Risk and High Risk.
+  gate failed
+    - engine hookrisk did not analyse the target: it was not recognised as a v4 hook (unsupported ABI) …
+    - the differential harness failed: harness setUp failed: … (HR-E304)
 
 complexity, customMath, externalDependencies, externalLiquidityExposure,
 upgradeability, autonomousParameterUpdates, priceImpactingBehavior
@@ -371,25 +374,21 @@ jq -r '.gate.passed, .coverage.harnessStatus, (.engines[]|select(.status=="faile
 ```
 ```json
 {"ts":"…","runId":"af6c2296-…","level":"error","stage":"harness","msg":"harness: failed — harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x778164c7; with a dynamic fee: 0x778164c7. … (HR-E304).","status":"failed","durationMs":307,"invariants":{"I1":"inconclusive","I2":"inconclusive","I3":"inconclusive"},"errorCode":"HR-E304"}
-{"ts":"…","runId":"af6c2296-…","level":"info","stage":"scan","msg":"scan: finished in 2728ms, exit 0","durationMs":2728,"exitCode":0,"tier":"low","total":3,"inconclusive":true,"findings":2,"gatePassed":true}
+{"ts":"…","runId":"af6c2296-…","level":"info","stage":"scan","msg":"scan: finished in 2728ms, exit 0","durationMs":2728,"exitCode":2,"tier":"low","total":3,"inconclusive":true,"findings":2,"gatePassed":false}
 ```
 ```
-.gate.passed            = true       .coverage.harnessStatus = failed
+.gate.passed            = false      .coverage.harnessStatus = failed
 engines[].errorCode     = HR-E304    invariants = I1/I2/I3 = inconclusive
 ```
 
-> **Deviation from the notes — say this out loud.** `notes-I.md` and
-> `.github/workflows/dogfood.yml` both assert this scan exits **2**. On this build
-> it exits **0** with `gate passed`. The manifest is honest (`harnessStatus:
-> failed`, `HR-E304`, all three invariants inconclusive) but a failed harness does
-> not fail the gate by itself, and with `failOnInconclusive` now defaulting to
-> `false` the undetermined tier does not either. The `unrunnable-hook` dogfood job
-> will fail its exit-code assertion until the gate rule or that fixture's config
-> changes. The strict posture is one line under `[gate]` in
-> `harness/hookrisk.toml` — `failOnInconclusive = true` — after which the same
-> scan exits 2 with *"tier is undetermined between Low Risk and High Risk; the
-> upper bound exceeds the configured maximum of medium and failOnInconclusive is
-> set (6 dimension(s) unmeasured: …)"*.
+> **Gate rule, say this out loud.** A failed engine is not a pass. Since the
+> third pass the gate has `failOnNotAnalysed = true` by default: a harness that
+> could not stand the hook up, a static engine that could not compile the
+> project, or a target the detectors never recognised as a v4 hook all fail the
+> gate with a reason naming the engine, and the scan exits **2**. The manifest
+> stays honest either way (`harnessStatus: failed`, `HR-E304`, invariants
+> inconclusive); the exit code now agrees with it. `failOnInconclusive` remains
+> the separate, off-by-default switch for an undetermined tier.
 
 **Say.** Every log line carries the same run id and a stage, so the engine and
 harness stages overlap without the output becoming unreadable — they run

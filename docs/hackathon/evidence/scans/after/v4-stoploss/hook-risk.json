@@ -17,7 +17,7 @@
     {
       "id": "959b8a6f4242751b",
       "ruleClass": "unsupported-hook-abi",
-      "title": "StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); callba...",
+      "title": "StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …",
       "description": "StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); callbacks with non-current signatures: afterDonate, afterSwap, beforeDonate, beforeSwap; inherits BaseHook without any current-ABI callback). hookrisk's detectors did not analyse this contract, so every code-derived dimension is unmeasured — a zero-finding scan here is not a clean result. Port it to the current IHooks interface and rescan.",
       "severity": "info",
       "confidence": "high",
@@ -60,7 +60,7 @@
         "bracketLabel": null,
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: flag-implementation-divergence requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); callba...); unprotected-hook-callback requires hookrisk or blocksec; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); callba...)."
+          "Not measured: flag-implementation-divergence requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …); unprotected-hook-callback requires hookrisk or blocksec; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …)."
         ]
       },
       {
@@ -72,7 +72,7 @@
         "bracketLabel": null,
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: custom-accounting requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); callba...); no detector for rounding-direction yet."
+          "Not measured: custom-accounting requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …); no detector for rounding-direction yet."
         ]
       },
       {
@@ -152,7 +152,7 @@
         "bracketLabel": null,
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: custom-accounting requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); callba...); no detector for unbounded-dynamic-fee yet."
+          "Not measured: custom-accounting requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …); no detector for unbounded-dynamic-fee yet."
         ]
       }
     ],
@@ -235,7 +235,7 @@
       "version": "0.11.6",
       "status": "ok",
       "findingCount": 1,
-      "durationMs": 6452
+      "durationMs": 7646
     },
     {
       "engine": "harness",
@@ -245,7 +245,7 @@
       "reason": "harness setUp failed: TwinPools: getHookPermissions() reverted on the supplied runtime code (not a BaseHook-shaped hook, or the wrong bytecode): 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).",
       "errorCode": "HR-E304",
       "findingCount": 0,
-      "durationMs": 172
+      "durationMs": 208
     }
   ],
   "coverage": {
@@ -276,12 +276,13 @@
     }
   ],
   "gate": {
-    "passed": true,
-    "maxTier": "medium",
+    "passed": false,
     "maxSeverity": "high",
-    "failures": [],
-    "notes": [
-      "tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (7 dimension(s) unmeasured: complexity, customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
+    "failOnInconclusive": false,
+    "failOnNotAnalysed": true,
+    "failures": [
+      "engine hookrisk did not analyse the target: it was not recognised as a v4 hook (unsupported ABI), so nothing code-derived was assessed",
+      "the differential harness failed: harness setUp failed: TwinPools: getHookPermissions() reverted on the supplied runtime code (not a BaseHook-shaped hook, or the wrong bytecode): 0x. The twin pools could not be built, so no sequence r"
     ]
   }
 }

@@ -47,9 +47,34 @@
       ]
     },
     {
+      "id": "565da8d49210a114",
+      "ruleClass": "callback-intentionally-disabled",
+      "title": "WETHHook (src/WETHHook.sol#12-54) overrides `beforeAddLiquidity` (inherited from BaseTokenWrapperHook._beforeAddLiquidity) with `revert …",
+      "description": "WETHHook (src/WETHHook.sol#12-54) overrides `beforeAddLiquidity` (inherited from BaseTokenWrapperHook._beforeAddLiquidity) with `revert LiquidityNotAllowed()`, so PoolManager-routed liquidity addition is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports.",
+      "severity": "info",
+      "confidence": "high",
+      "location": {
+        "file": "src/WETHHook.sol",
+        "line": 12,
+        "endLine": 54
+      },
+      "discriminator": "beforeAddLiquidity",
+      "evidence": [
+        "WETHHook (src/WETHHook.sol#12-54) overrides `beforeAddLiquidity` (inherited from BaseTokenWrapperHook._beforeAddLiquidity) with `revert LiquidityNotAllowed()`, so PoolManager-routed liquidity addition is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-disabled-callback",
+          "severity": "info",
+          "confidence": "high"
+        }
+      ]
+    },
+    {
       "id": "b679a0a144e04534",
       "ruleClass": "hook-profile",
-      "title": "WETHHook (src/WETHHook.sol#12-54) is a recognised v4 hook: implements beforeInitialize, beforeSwap; declares 3 callback permission(s); 0 state write(s) reach...",
+      "title": "WETHHook (src/WETHHook.sol#12-54) is a recognised v4 hook: implements beforeInitialize, beforeSwap; declares 3 callback permission(s); 0 state write(s) …",
       "description": "WETHHook (src/WETHHook.sol#12-54) is a recognised v4 hook: implements beforeInitialize, beforeSwap; declares 3 callback permission(s); 0 state write(s) reachable from callbacks; 7 external call(s) in the swap path.",
       "severity": "info",
       "confidence": "high",
@@ -399,8 +424,8 @@
       "displayName": "hookrisk Slither detectors",
       "version": "0.11.6",
       "status": "ok",
-      "findingCount": 2,
-      "durationMs": 10912
+      "findingCount": 3,
+      "durationMs": 14306
     },
     {
       "engine": "harness",
@@ -408,8 +433,9 @@
       "version": "1.7.1",
       "status": "skipped",
       "reason": "WETHHook's constructor takes 2 argument(s) (address _manager, address _weth) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305.",
+      "errorCode": "HR-E305",
       "findingCount": 0,
-      "durationMs": 6
+      "durationMs": 8
     }
   ],
   "coverage": {
@@ -590,11 +616,9 @@
   ],
   "gate": {
     "passed": true,
-    "maxTier": "medium",
     "maxSeverity": "high",
-    "failures": [],
-    "notes": [
-      "tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
-    ]
+    "failOnInconclusive": false,
+    "failOnNotAnalysed": true,
+    "failures": []
   }
 }

@@ -8,7 +8,7 @@ is still open. Everything below is checkable against the branch.
 
 | | |
 |---|---|
-| Branch | `feat/hackathon-p0` (upstream is `origin` = `0xmvercosa/hookrisk`; `main` is the untouched upstream state) |
+| Branch | `feat/hackathon-p0`. `origin` = `0xmvercosa/hookrisk` is the upstream author's repo and rejects pushes; the work is pushed to the private remote `mine` = `github.com/rafaelzochling/hookrisk` (make it public or move it to the hackathon repo when ready). `main` is the untouched upstream state. |
 | Environment | `make setup` then `make test`. Expected green: 274 CLI tests, 45 harness tests (1 skipped), 29 detector tests, 3 corpus gates. `./scripts/doctor.sh` must show the detectors registered. |
 | Narrative | `HACKATHON.md` (what was found, what changed in two passes, limits) |
 | Per-change notes | `notes-A.md` … `notes-I.md` (A–E pass 1, F–I pass 2). Each has a "How to demo", "Caveats" and "Integrator" section. |
@@ -84,6 +84,40 @@ and `maxFeeBips = 10` in its `hookrisk.toml` (copy is in
   fresh temp path, ad-hoc runs must too.
 - Concurrent scans in one checkout are safe (verified with forge 1.7.1); run
   records and observation logs are keyed by run id.
+
+## Third pass: what the re-scan found and what was fixed
+
+After the design pass, 14 agents re-scanned the hooks against the new build
+(`evidence/agent-scan-results-after.json`). Fixed from that list: HS-01 no
+longer reports a HIGH on a callback whose body is an unconditional revert
+(Cork's `beforeAddLiquidity` was double-classified); `callback-intentionally-disabled`
+is anchored on the analysed hook when the revert lives in an inherited base
+(WETHHook, StablePairHook lost the classification to the file filter);
+HS-07 and the scorer distinguish a swap-side returns-delta from a
+liquidity-only one (LiquidityPenaltyHook was scored as a custom curve);
+engine failures and an unrecognised target now fail the gate by default
+(`failOnNotAnalysed`; three unanalysed hooks had passed with exit 0);
+inconclusive invariants no longer say "passed vacuously"; the report's
+findings count and the engine table agree about the hook profile; titles
+are cut at word boundaries; the FEEDBACK link is absolute; the harness carries
+an error code when skipped; `permissions.disagreement` is always present when
+both sets exist; HR-E304/305 are documented as engine results, not exit codes;
+the harness skip says "does not compile" when the static engine already knows.
+
+Still open from that run, in addition to the list below: the `hook-profile`
+metric `externalCallsInSwapPath` counts PoolManager settlement calls together
+with third-party calls, so it cannot feed externalDependencies until the
+destinations are classified; `hasOwnerOnlyFunctions` misses AccessControl
+(`hasRole`/`onlyRole`) and reports StablePairHook as having no admin surface;
+HR-E205 uncovered functions are compilation-unit wide, not scoped to the
+target's inheritance chain; the security plan is derived from the lower-bound
+tier while the tier is undetermined (should merge the upper bound's baseline);
+raw revert data in harness failures is not decoded against the target's ABI;
+the fuzz seed is not recorded, so observation counts differ run to run;
+`coverage.uncoveredFunctions = []` reads as full coverage when the target was
+never analysed (a `coverage.targetAnalysed` field would settle it); wrapper
+hooks that require `fee == 0` (WETHHook) cannot be stood up and the message
+implies constructor arguments would fix it.
 
 ## Open items, in priority order
 

@@ -340,7 +340,9 @@ describe('renderMarkdown', () => {
   });
 
   test('shows the gate note next to the verdict and the error code in the engines table', () => {
-    assert.match(report, /✅ \*\*Gate passed\.\*\*\n\n> ℹ️ tier is undetermined between Low Risk and High Risk/);
+    // An engine that failed is not a pass: failOnNotAnalysed defaults on, so
+    // the verdict flips and names the engine, and the tier note still follows.
+    assert.match(report, /❌ \*\*Gate failed\.\*\*\n- engine hookrisk failed: HR-E202 compilation failed\n\n> ℹ️ tier is undetermined between Low Risk and High Risk/);
     assert.match(report, /\| hookrisk Slither detectors \| failed \(HR-E202\) \| 0 \| HR-E202 compilation failed \|/);
   });
 

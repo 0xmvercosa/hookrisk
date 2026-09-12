@@ -612,7 +612,11 @@ function firstSentence(text: string): string {
   const line = text.split('\n')[0] ?? text;
   const stop = line.indexOf('. ');
   const sentence = stop > 0 ? line.slice(0, stop) : line;
-  return sentence.length > 160 ? `${sentence.slice(0, 157)}...` : sentence;
+  if (sentence.length <= 160) return sentence;
+  // Cut at a word boundary: a title chopped mid-identifier reads as corrupt
+  // data in a report heading and in SARIF.
+  const cut = sentence.lastIndexOf(' ', 157);
+  return `${sentence.slice(0, cut > 80 ? cut : 157)} …`;
 }
 
 /** Run a command with a hard timeout. Never uses a shell. */

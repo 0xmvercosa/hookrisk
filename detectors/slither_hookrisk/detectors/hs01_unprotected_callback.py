@@ -36,6 +36,7 @@ from slither.core.declarations import Contract
 from slither.utils.output import Output
 
 from ..utils.hook_analysis import (
+    classify_callback,
     guards_pool_manager,
     implemented_callbacks,
     pool_manager_variables,
@@ -95,6 +96,8 @@ dynamic fee, a reward accrual — is corrupted without a single token moving.
             # construction, and we cannot point at the check that is missing
             # because there is nothing to check against.
             for callback in implemented_callbacks(contract):
+                if not classify_callback(callback.function, contract).is_implemented:
+                    continue
                 results.append(
                     self._report(
                         [
@@ -113,6 +116,13 @@ dynamic fee, a reward accrual — is corrupted without a single token moving.
         readable = ", ".join(sorted(v.name for v in pool_manager_vars))
         for callback in implemented_callbacks(contract):
             if guards_pool_manager(callback.function, pool_manager_vars) is not None:
+                continue
+            # A callback whose body is an unconditional revert (BaseHook's stub,
+            # or a deliberate revert-guard) has no reachable surface: an
+            # attacker calling it gets a revert and nothing else. Reporting it
+            # as HIGH double-counts what HS-02 or the disabled-callback
+            # classification already say about the same function.
+            if not classify_callback(callback.function, contract).is_implemented:
                 continue
             results.append(
                 self._report(

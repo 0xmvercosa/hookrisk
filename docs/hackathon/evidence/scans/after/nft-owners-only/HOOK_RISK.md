@@ -4,9 +4,8 @@
 
 > **Tier is undetermined.** 3/33 from what could be measured, up to 28/33 if every unmeasured dimension were at its maximum — between low and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
-✅ **Gate passed.**
-
-> ℹ️ tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (7 dimension(s) unmeasured: complexity, customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
+❌ **Gate failed.**
+- engine hookrisk did not analyse the target: it was not recognised as a v4 hook (unsupported ABI), so nothing code-derived was assessed
 
 ## What was assessed
 
@@ -30,7 +29,7 @@
 | Autonomous parameter updates | — | unmeasured | _unmeasured_ ᵃ |
 | Price impacting behavior | — | unmeasured | _unmeasured_ ᵃ |
 
-ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](FEEDBACK.md) #2.
+ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
 ## Security plan
 
@@ -44,7 +43,7 @@
 
 ## Findings
 
-### ℹ️ ERC721OwnershipHook (src/ERC721OwnershipHook.sol#10-48) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 ge...
+### ℹ️ ERC721OwnershipHook (src/ERC721OwnershipHook.sol#10-48) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 …
 
 `unsupported-hook-abi` · **info** · confidence **high**
 
@@ -67,7 +66,7 @@ Reported by: `hookrisk/hookrisk-unsupported-abi`
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
 | hookrisk Slither detectors | ok | 1 |  |
-| Differential harness (Foundry) | skipped | 0 | ERC721OwnershipHook's constructor takes 2 argument(s) (address _poolManager, address _nftContract) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305. |
+| Differential harness (Foundry) | skipped (HR-E305) | 0 | ERC721OwnershipHook's constructor takes 2 argument(s) (address _poolManager, address _nftContract) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305. |
 
 ## Warnings
 

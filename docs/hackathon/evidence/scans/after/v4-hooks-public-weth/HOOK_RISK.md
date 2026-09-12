@@ -6,8 +6,6 @@
 
 ✅ **Gate passed.**
 
-> ℹ️ tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
-
 ## What was assessed
 
 | | |
@@ -20,7 +18,7 @@
 
 | Metric | Value |
 | --- | --- |
-| Callbacks implemented (count) | 2 |
+| Callbacks implemented (working; deliberate revert-guards are listed as disabled) | 2 |
 | Callbacks declared | 3 |
 | State writes in callbacks | 0 |
 | External calls in the swap path | 7 |
@@ -45,7 +43,7 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 | Autonomous parameter updates | — | unmeasured | _unmeasured_ ᵃ |
 | Price impacting behavior | 3/3 | measured | Returns a swap delta (custom curve or NoOp), or adjusts fees without a ceiling ᵃ |
 
-ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](FEEDBACK.md) #2.
+ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
 ### Feature triggers
 
@@ -82,6 +80,16 @@ WETHHook (src/WETHHook.sol#12-54) declares custom-accounting permissions: `befor
 
 Reported by: `hookrisk/hookrisk-custom-accounting`
 
+### ℹ️ WETHHook (src/WETHHook.sol#12-54) overrides `beforeAddLiquidity` (inherited from BaseTokenWrapperHook._beforeAddLiquidity) with `revert …
+
+`callback-intentionally-disabled` (`beforeAddLiquidity`) · **info** · confidence **high**
+
+`src/WETHHook.sol:12`
+
+WETHHook (src/WETHHook.sol#12-54) overrides `beforeAddLiquidity` (inherited from BaseTokenWrapperHook._beforeAddLiquidity) with `revert LiquidityNotAllowed()`, so PoolManager-routed liquidity addition is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports.
+
+Reported by: `hookrisk/hookrisk-disabled-callback`
+
 ## Invariants
 
 | | Invariant | Result | Detail |
@@ -94,8 +102,8 @@ Reported by: `hookrisk/hookrisk-custom-accounting`
 
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
-| hookrisk Slither detectors | ok | 2 |  |
-| Differential harness (Foundry) | skipped | 0 | WETHHook's constructor takes 2 argument(s) (address _manager, address _weth) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305. |
+| hookrisk Slither detectors | ok | 3 |  |
+| Differential harness (Foundry) | skipped (HR-E305) | 0 | WETHHook's constructor takes 2 argument(s) (address _manager, address _weth) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305. |
 
 > ⚠️ **26 function(s) were not analysed.** Slither could not lift them to IR and continued silently. Findings below do not cover them — this is not the same as those functions being clean. See `HR-E205`.
 

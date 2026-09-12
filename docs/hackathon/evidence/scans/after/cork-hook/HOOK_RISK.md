@@ -5,9 +5,7 @@
 > **Tier is undetermined.** 14/33 from what could be measured, up to 26/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
 ❌ **Gate failed.**
-- 4 finding(s) at or above high: CorkHook.beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/CorkHook.sol#88-95) is an IHooks callback (0x259982e5) that never ...; CorkHook.beforeInitialize(address,PoolKey,uint160) (src/CorkHook.sol#97-124) is an IHooks callback (0xdc98354e) that never compares msg.sender against poolMa...; CorkHook.beforeSwap(address,PoolKey,IPoolManager.SwapParams,bytes) (src/CorkHook.sol#365-378) is an IHooks callback (0x575e24b4) that never compares msg.send...
-
-> ℹ️ tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
+- 3 finding(s) at or above high: CorkHook.beforeInitialize(address,PoolKey,uint160) (src/CorkHook.sol#97-124) is an IHooks callback (0xdc98354e) that never compares msg.sender against …; CorkHook.beforeSwap(address,PoolKey,IPoolManager.SwapParams,bytes) (src/CorkHook.sol#365-378) is an IHooks callback (0x575e24b4) that never compares …; CorkHook (src/CorkHook.sol#31-734) declares permission `beforeRemoveLiquidity` (bit 9, BEFORE_REMOVE_LIQUIDITY_FLAG) but provides no working …
 
 ## What was assessed
 
@@ -21,7 +19,7 @@
 
 | Metric | Value |
 | --- | --- |
-| Callbacks implemented (count) | 2 |
+| Callbacks implemented (working; deliberate revert-guards are listed as disabled) | 2 |
 | Callbacks declared | 4 |
 | State writes in callbacks | 4 |
 | External calls in the swap path | 5 |
@@ -46,7 +44,7 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 | Autonomous parameter updates | — | unmeasured | _unmeasured_ ᵃ |
 | Price impacting behavior | 3/3 | measured | Returns a swap delta (custom curve or NoOp), or adjusts fees without a ceiling ᵃ |
 
-ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](FEEDBACK.md) #2.
+ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
 ### Feature triggers
 
@@ -73,17 +71,7 @@ These apply regardless of the total score — the framework's own safeguard agai
 
 ## Findings
 
-### 🟠 CorkHook.beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/CorkHook.sol#88-95) is an IHooks callback (0x259982e5) that never ...
-
-`unprotected-hook-callback` (`beforeAddLiquidity`) · **high** · confidence **high**
-
-`src/CorkHook.sol:88`
-
-CorkHook.beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/CorkHook.sol#88-95) is an IHooks callback (0x259982e5) that never compares msg.sender against poolManager. Anyone can call it with an arbitrary PoolKey and arbitrary hookData.
-
-Reported by: `hookrisk/hookrisk-unprotected-callback`
-
-### 🟠 CorkHook.beforeInitialize(address,PoolKey,uint160) (src/CorkHook.sol#97-124) is an IHooks callback (0xdc98354e) that never compares msg.sender against poolMa...
+### 🟠 CorkHook.beforeInitialize(address,PoolKey,uint160) (src/CorkHook.sol#97-124) is an IHooks callback (0xdc98354e) that never compares msg.sender against …
 
 `unprotected-hook-callback` (`beforeInitialize`) · **high** · confidence **high**
 
@@ -93,7 +81,7 @@ CorkHook.beforeInitialize(address,PoolKey,uint160) (src/CorkHook.sol#97-124) is 
 
 Reported by: `hookrisk/hookrisk-unprotected-callback`
 
-### 🟠 CorkHook.beforeSwap(address,PoolKey,IPoolManager.SwapParams,bytes) (src/CorkHook.sol#365-378) is an IHooks callback (0x575e24b4) that never compares msg.send...
+### 🟠 CorkHook.beforeSwap(address,PoolKey,IPoolManager.SwapParams,bytes) (src/CorkHook.sol#365-378) is an IHooks callback (0x575e24b4) that never compares …
 
 `unprotected-hook-callback` (`beforeSwap`) · **high** · confidence **high**
 
@@ -103,7 +91,7 @@ CorkHook.beforeSwap(address,PoolKey,IPoolManager.SwapParams,bytes) (src/CorkHook
 
 Reported by: `hookrisk/hookrisk-unprotected-callback`
 
-### 🟠 CorkHook (src/CorkHook.sol#31-734) declares permission `beforeRemoveLiquidity` (bit 9, BEFORE_REMOVE_LIQUIDITY_FLAG) but provides no working `beforeRemoveLiq...
+### 🟠 CorkHook (src/CorkHook.sol#31-734) declares permission `beforeRemoveLiquidity` (bit 9, BEFORE_REMOVE_LIQUIDITY_FLAG) but provides no working …
 
 `flag-implementation-divergence` (`beforeRemoveLiquidity`) · **high** · confidence **medium**
 
@@ -123,13 +111,13 @@ CorkHook (src/CorkHook.sol#31-734) declares custom-accounting permissions: `befo
 
 Reported by: `hookrisk/hookrisk-custom-accounting`
 
-### ℹ️ CorkHook.beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/CorkHook.sol#88-95) overrides `beforeAddLiquidity` with `revert Di...
+### ℹ️ CorkHook.beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/CorkHook.sol#88-95) overrides `beforeAddLiquidity` with `revert …
 
 `callback-intentionally-disabled` (`beforeAddLiquidity`) · **info** · confidence **high**
 
 `src/CorkHook.sol:88`
 
-CorkHook.beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/CorkHook.sol#88-95) overrides `beforeAddLiquidity` with `revert DisableNativeLiquidityModification()`, so PoolManager-routed liquidity addition is disabled by design. The harness will observe reverts there; this is not the missing implementation HS-02 reports.
+CorkHook.beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/CorkHook.sol#88-95) overrides `beforeAddLiquidity` with `revert DisableNativeLiquidityModification()`, so PoolManager-routed liquidity addition is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports.
 
 Reported by: `hookrisk/hookrisk-disabled-callback`
 
@@ -145,8 +133,8 @@ Reported by: `hookrisk/hookrisk-disabled-callback`
 
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
-| hookrisk Slither detectors | ok | 7 |  |
-| Differential harness (Foundry) | skipped | 0 | CorkHook's constructor takes 3 argument(s) (address _poolManager, address _lpBase, address owner) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305. |
+| hookrisk Slither detectors | ok | 6 |  |
+| Differential harness (Foundry) | skipped (HR-E305) | 0 | CorkHook's constructor takes 3 argument(s) (address _poolManager, address _lpBase, address owner) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305. |
 
 ## Warnings
 

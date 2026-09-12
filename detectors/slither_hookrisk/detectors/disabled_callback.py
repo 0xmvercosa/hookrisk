@@ -107,15 +107,28 @@ class CallbackIntentionallyDisabled(HookriskDetector):
 
             assert verdict.revert is not None  # INTENTIONALLY_DISABLED implies a revert
             operation = CALLBACK_OPERATIONS[callback.name]
+            # Anchor on the analysed hook when the revert lives in a base it
+            # inherits (WETHHook via BaseTokenWrapperHook, StablePairHook via
+            # BaseDynamicFeeHook): the CLI attributes findings to the target
+            # file, and a classification anchored on lib/ or src/base/ would
+            # never reach the report of the hook it describes.
+            inherited = verdict.delegate.contract_declarer != contract
+            anchor = contract if inherited else verdict.delegate
+            via = (
+                f" (inherited from {verdict.delegate.contract_declarer.name}."
+                f"{verdict.delegate.name})"
+                if inherited
+                else ""
+            )
             results.append(
                 self._report(
                     [
-                        verdict.delegate,
-                        f" overrides `{callback.name}` with `revert "
+                        anchor,
+                        f" overrides `{callback.name}`{via} with `revert "
                         f"{verdict.revert.describe()}`, so PoolManager-routed "
-                        f"{operation} is disabled by design. The harness will "
-                        f"observe reverts there; this is not the missing "
-                        f"implementation HS-02 reports.\n",
+                        f"{operation} is disabled by design; the differential "
+                        f"harness records such reverts when it runs. This is "
+                        f"not the missing implementation HS-02 reports.\n",
                     ],
                     discriminator=callback.name,
                 )

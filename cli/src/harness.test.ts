@@ -328,9 +328,9 @@ describe('translate with observations', () => {
     assert.equal(result.status, 'ok', 'the harness ran; it is the invariants that measured nothing');
     assert.deepEqual(result.invariants.map((i) => i.status), ['inconclusive', 'inconclusive', 'inconclusive']);
     const [i1, i2, i3] = result.invariants;
-    assert.match(i1!.detail ?? '', /^passed vacuously: 0 swaps landed and 0 positions opened across 1280 sequences/);
-    assert.match(i2!.detail ?? '', /^passed vacuously: 0 swaps compared across 1280 sequences/);
-    assert.match(i3!.detail ?? '', /^passed vacuously: 0 positions opened across 1280 sequences/);
+    assert.match(i1!.detail ?? '', /^inconclusive, nothing relevant was observed: 0 swaps landed and 0 positions opened across 1280 sequences/);
+    assert.match(i2!.detail ?? '', /^inconclusive, nothing relevant was observed: 0 swaps compared across 1280 sequences/);
+    assert.match(i3!.detail ?? '', /^inconclusive, nothing relevant was observed: 0 positions opened across 1280 sequences/);
     assert.match(i3!.detail ?? '', /Observed: 1280 sequence\(s\), 0 swap\(s\) landed/);
   });
 
@@ -366,7 +366,7 @@ describe('translate with observations', () => {
 
     const unchecked = translate(report(ALL_PASS), { customCurve: true, observations: observed({ swapsExecuted: 10 }) });
     assert.equal(unchecked.invariants[1]!.status, 'inconclusive');
-    assert.match(unchecked.invariants[1]!.detail ?? '', /^passed vacuously: 0 price checks/);
+    assert.match(unchecked.invariants[1]!.detail ?? '', /^inconclusive, nothing relevant was observed: 0 price checks/);
     assert.match(unchecked.invariants[1]!.detail ?? '', /price monotonicity was asserted instead/, 'the custom-curve note is kept');
   });
 

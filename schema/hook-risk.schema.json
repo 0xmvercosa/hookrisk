@@ -708,6 +708,10 @@
           "items": {
             "type": "string"
           }
+        },
+        "failOnNotAnalysed": {
+          "type": "boolean",
+          "description": "When true (the default), an engine that failed or a static engine that never recognised the target fails the gate: a scan that assessed nothing is not a pass."
         }
       }
     }

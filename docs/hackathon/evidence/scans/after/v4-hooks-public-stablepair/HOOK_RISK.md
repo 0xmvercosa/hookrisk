@@ -5,9 +5,8 @@
 > **Tier is undetermined.** 5/33 from what could be measured, up to 25/33 if every unmeasured dimension were at its maximum — between low and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
 ❌ **Gate failed.**
-- 1 finding(s) at or above high: StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working `afterIni...
-
-> ℹ️ tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (6 dimension(s) unmeasured: customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
+- the differential harness failed: harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa13000000000000
+- 1 finding(s) at or above high: StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working …
 
 ## What was assessed
 
@@ -21,7 +20,7 @@
 
 | Metric | Value |
 | --- | --- |
-| Callbacks implemented (count) | 4 |
+| Callbacks implemented (working; deliberate revert-guards are listed as disabled) | 4 |
 | Callbacks declared | 6 |
 | State writes in callbacks | 1 |
 | External calls in the swap path | 0 |
@@ -46,7 +45,7 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 | Autonomous parameter updates | — | unmeasured | _unmeasured_ ᵃ |
 | Price impacting behavior | — | unmeasured | _unmeasured_ ᵃ |
 
-ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](FEEDBACK.md) #2.
+ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
 ## Security plan
 
@@ -60,7 +59,7 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 
 ## Findings
 
-### 🟠 StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working `afterIni...
+### 🟠 StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working …
 
 `flag-implementation-divergence` (`afterInitialize`) · **high** · confidence **medium**
 
@@ -69,6 +68,16 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working `afterInitialize` implementation. The PoolManager will call it on every matching pool operation and the call will revert, making the pool unusable for that operation.
 
 Reported by: `hookrisk/hookrisk-flag-divergence`
+
+### ℹ️ StablePairHook (src/stable/StablePairHook.sol#25-259) overrides `beforeInitialize` (inherited from BaseDynamicFeeHook._beforeInitialize) with `revert …
+
+`callback-intentionally-disabled` (`beforeInitialize`) · **info** · confidence **high**
+
+`src/stable/StablePairHook.sol:25`
+
+StablePairHook (src/stable/StablePairHook.sol#25-259) overrides `beforeInitialize` (inherited from BaseDynamicFeeHook._beforeInitialize) with `revert InvalidInitializer()`, so PoolManager-routed pool initialisation is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports.
+
+Reported by: `hookrisk/hookrisk-disabled-callback`
 
 ## Invariants
 
@@ -82,7 +91,7 @@ Reported by: `hookrisk/hookrisk-flag-divergence`
 
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
-| hookrisk Slither detectors | ok | 2 |  |
+| hookrisk Slither detectors | ok | 3 |  |
 | Differential harness (Foundry) | failed (HR-E304) | 0 | harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
 
 > ⚠️ **26 function(s) were not analysed.** Slither could not lift them to IR and continued silently. Findings below do not cover them — this is not the same as those functions being clean. See `HR-E205`.

@@ -4,9 +4,8 @@
 
 > **Tier is undetermined.** 3/33 from what could be measured, up to 28/33 if every unmeasured dimension were at its maximum — between low and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
-✅ **Gate passed.**
-
-> ℹ️ tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (7 dimension(s) unmeasured: complexity, customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
+❌ **Gate failed.**
+- engine hookrisk failed: HR-E203 Target compiles under forge but not under Slither: Error (7920): Identifier not found or not unique. --> src/RefHook.sol:144:59:
 
 ## What was assessed
 
@@ -30,7 +29,7 @@
 | Autonomous parameter updates | — | unmeasured | _unmeasured_ ᵃ |
 | Price impacting behavior | — | unmeasured | _unmeasured_ ᵃ |
 
-ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](FEEDBACK.md) #2.
+ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
 ## Security plan
 
@@ -58,7 +57,7 @@ None.
 
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
-| hookrisk Slither detectors | failed (HR-E202) | 0 | HR-E202 Foundry test path shadows the source path, so nothing is analysed: Error (7920): Identifier not found or not unique. --> src/RefHook.sol:144:59: |
+| hookrisk Slither detectors | failed (HR-E203) | 0 | HR-E203 Target compiles under forge but not under Slither: Error (7920): Identifier not found or not unique. --> src/RefHook.sol:144:59: |
 | Differential harness (Foundry) | skipped | 0 | artifact directory /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo/out does not exist (forge config: out = "out") — run `forge build` in /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo first. |
 
 ## Warnings

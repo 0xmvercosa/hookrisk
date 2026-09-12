@@ -17,7 +17,7 @@
     {
       "id": "3a836bfd59163187",
       "ruleClass": "unprotected-hook-callback",
-      "title": "V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never c...",
+      "title": "V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never …",
       "description": "V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never compares msg.sender against poolManager. Anyone can call it with an arbitrary PoolKey and arbitrary hookData.",
       "severity": "high",
       "confidence": "high",
@@ -81,7 +81,7 @@
     {
       "id": "5729365f0e5cf93d",
       "ruleClass": "unsupported-hook-abi",
-      "title": "V2PairHook (src/V2PairHook.sol#21-284) implements afterAddLiquidity, afterInitialize, afterRemoveLiquidity, beforeAddLiquidity, beforeInitialize, beforeRemov...",
+      "title": "V2PairHook (src/V2PairHook.sol#21-284) implements afterAddLiquidity, afterInitialize, afterRemoveLiquidity, beforeAddLiquidity, beforeInitialize, …",
       "description": "V2PairHook (src/V2PairHook.sol#21-284) implements afterAddLiquidity, afterInitialize, afterRemoveLiquidity, beforeAddLiquidity, beforeInitialize, beforeRemoveLiquidity with signatures that predate the shipped v4 interface. hookrisk analysed the callbacks that match and did not judge these: the current PoolManager would not reach them, and no detector reports on what it cannot read.",
       "severity": "info",
       "confidence": "high",
@@ -106,7 +106,7 @@
     {
       "id": "8b9a98a6e6a72295",
       "ruleClass": "hook-profile",
-      "title": "V2PairHook (src/V2PairHook.sol#21-284) is a recognised v4 hook: implements afterSwap, beforeSwap; declares 4 callback permission(s); 2 state write(s) reachab...",
+      "title": "V2PairHook (src/V2PairHook.sol#21-284) is a recognised v4 hook: implements afterSwap, beforeSwap; declares 4 callback permission(s); 2 state write(s) …",
       "description": "V2PairHook (src/V2PairHook.sol#21-284) is a recognised v4 hook: implements afterSwap, beforeSwap; declares 4 callback permission(s); 2 state write(s) reachable from callbacks; 4 external call(s) in the swap path.",
       "severity": "info",
       "confidence": "high",
@@ -458,7 +458,7 @@
       "version": "0.11.6",
       "status": "ok",
       "findingCount": 4,
-      "durationMs": 10751
+      "durationMs": 13144
     },
     {
       "engine": "harness",
@@ -468,7 +468,7 @@
       "reason": "harness setUp failed: TwinPools: hook constructor reverted: 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).",
       "errorCode": "HR-E304",
       "findingCount": 0,
-      "durationMs": 190
+      "durationMs": 252
     }
   ],
   "coverage": {
@@ -518,13 +518,12 @@
   ],
   "gate": {
     "passed": false,
-    "maxTier": "medium",
     "maxSeverity": "high",
+    "failOnInconclusive": false,
+    "failOnNotAnalysed": true,
     "failures": [
-      "1 finding(s) at or above high: V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never c..."
-    ],
-    "notes": [
-      "tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
+      "the differential harness failed: harness setUp failed: TwinPools: hook constructor reverted: 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).",
+      "1 finding(s) at or above high: V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never …"
     ]
   }
 }

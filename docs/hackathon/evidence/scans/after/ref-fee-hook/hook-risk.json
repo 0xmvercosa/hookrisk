@@ -209,10 +209,10 @@
       "displayName": "hookrisk Slither detectors",
       "version": "0.11.6",
       "status": "failed",
-      "reason": "HR-E202 Foundry test path shadows the source path, so nothing is analysed: Error (7920): Identifier not found or not unique. --> src/RefHook.sol:144:59:",
-      "errorCode": "HR-E202",
+      "reason": "HR-E203 Target compiles under forge but not under Slither: Error (7920): Identifier not found or not unique. --> src/RefHook.sol:144:59:",
+      "errorCode": "HR-E203",
       "findingCount": 0,
-      "durationMs": 733
+      "durationMs": 939
     },
     {
       "engine": "harness",
@@ -221,7 +221,7 @@
       "status": "skipped",
       "reason": "artifact directory /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo/out does not exist (forge config: out = \"out\") — run `forge build` in /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo first.",
       "findingCount": 0,
-      "durationMs": 6
+      "durationMs": 7
     }
   ],
   "coverage": {
@@ -252,12 +252,12 @@
     }
   ],
   "gate": {
-    "passed": true,
-    "maxTier": "medium",
+    "passed": false,
     "maxSeverity": "high",
-    "failures": [],
-    "notes": [
-      "tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (7 dimension(s) unmeasured: complexity, customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
+    "failOnInconclusive": false,
+    "failOnNotAnalysed": true,
+    "failures": [
+      "engine hookrisk failed: HR-E203 Target compiles under forge but not under Slither: Error (7920): Identifier not found or not unique. --> src/RefHook.sol:144:59:"
     ]
   }
 }

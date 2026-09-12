@@ -50,6 +50,8 @@ export interface GatePolicy {
    * nothing. On, it is the strict posture — "unknown is not a pass".
    */
   failOnInconclusive?: boolean;
+  /** Fail when an engine failed or the static engine never recognised the target. Default true. */
+  failOnNotAnalysed?: boolean;
 }
 
 /** How the differential harness should construct the hook. */
@@ -300,6 +302,14 @@ export function fromDocument(document: TomlDocument, sourcePath?: string): Hookr
   if (gateTable.failOnPartialCoverage !== undefined) {
     gate.failOnPartialCoverage = Boolean(gateTable.failOnPartialCoverage);
   }
+  if (gateTable.failOnNotAnalysed !== undefined) {
+    if (typeof gateTable.failOnNotAnalysed !== 'boolean') {
+      throw new HookriskError('HR-E101', {
+        detail: `[gate] failOnNotAnalysed must be true or false, got ${JSON.stringify(gateTable.failOnNotAnalysed)}.`,
+      });
+    }
+    gate.failOnNotAnalysed = gateTable.failOnNotAnalysed;
+  }
   if (gateTable.failOnInconclusive !== undefined) {
     // Strictly a boolean. `"false"` is truthy, and a gate policy silently read
     // as its opposite is exactly the kind of misparse this file refuses.
@@ -428,6 +438,13 @@ failOnPartialCoverage = false
 # strict posture: unknown is not a pass, and you declare the unmeasured
 # dimensions in [declared] until the range closes.
 failOnInconclusive = false
+
+# Fail when hookrisk could not assess the hook at all: an engine failed (the
+# project does not compile under Slither, the harness could not stand the hook
+# up) or static analysis never recognised the contract as a v4 hook. A scan
+# that assessed nothing must not read as a clean pass. Skipped engines, whose
+# reason is recorded, do not count.
+failOnNotAnalysed = true
 
 [engines]
 

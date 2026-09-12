@@ -1,11 +1,11 @@
-  scan: src/mocks/general/AntiSandwichMock.sol:AntiSandwichMock run=ed2e90bc-f4d2-4ba6-965e-3584eabecad2
+  scan: src/mocks/general/AntiSandwichMock.sol:AntiSandwichMock run=6f66f60b-3157-446f-bc0d-fed60f7ac703
   project: out=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/oz-antisandwich-mock/repo/out solc=0.8.26 (forge-config) artifact=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/oz-antisandwich-mock/repo/out/AntiSandwichMock.sol/AntiSandwichMock.json
-  harness: AntiSandwichMock.sol:AntiSandwichMock flags=derived-from-runtime maxFee=0bips ctorArgs=1 word(s) run=7fd18d60-2383-4230-a008-dcee8bdab8e3
+  harness: AntiSandwichMock.sol:AntiSandwichMock flags=derived-from-runtime maxFee=0bips ctorArgs=1 word(s) run=dd71a2e1-2e80-4864-b252-83621fad828d
   hookrisk: slither src/mocks/general/AntiSandwichMock.sol:AntiSandwichMock
-  harness: 3 invariant(s), 0 failed (flags=0xc4 derived, seeded=both) observed 1285 sequence(s), 13900 swap(s) landed, 13900 compared, 13900 price check(s), 6690 position(s) opened, 6690 closed, 6710 donation(s), 0 hooked-only swap revert(s), 0 exit failure(s)
+  harness: 3 invariant(s), 0 failed (flags=0xc4 derived, seeded=both) observed 1285 sequence(s), 13450 swap(s) landed, 13450 compared, 13450 price check(s), 7110 position(s) opened, 7110 closed, 6760 donation(s), 0 hooked-only swap revert(s), 0 exit failure(s)
   hookrisk: 3 function(s) could not be lifted to IR and were not analysed (HR-E205)
-  hookrisk: 32 finding(s) in other files, not attributed to this target: src/mocks/base/BaseHookMock.sol (12), src/base/BaseCustomAccounting.sol (2), src/mocks/base/BaseAsyncSwapMock.sol (2), src/mocks/base/BaseCustomCurveMock.sol (2), src/mocks/fee/BaseDynamicAfterFeeMock.sol (2), src/mocks/fee/BaseHookFeeMock.sol (2), src/mocks/general/LiquidityPenaltyHookMock.sol (2), src/mocks/base/BaseCustomAccountingFeeMock.sol (1), src/mocks/fee/BaseDynamicFeeMock.sol (1), src/mocks/fee/BaseOverrideFeeMock.sol (1), src/mocks/general/LimitOrderHookMock.sol (1), src/mocks/general/ReHypothecationERC4626Mock.sol (1), src/mocks/general/ReHypothecationNativeMock.sol (1), src/mocks/oracles/panoptic/BaseOracleHookMock.sol (1), src/mocks/oracles/panoptic/OracleHookWithV3AdaptersMock.sol (1)
+  hookrisk: 34 finding(s) in other files, not attributed to this target: src/mocks/base/BaseHookMock.sol (12), src/mocks/base/BaseCustomCurveMock.sol (4), src/mocks/base/BaseCustomAccountingFeeMock.sol (3), src/mocks/base/BaseAsyncSwapMock.sol (2), src/mocks/fee/BaseDynamicAfterFeeMock.sol (2), src/mocks/fee/BaseHookFeeMock.sol (2), src/mocks/general/LiquidityPenaltyHookMock.sol (2), src/mocks/fee/BaseDynamicFeeMock.sol (1), src/mocks/fee/BaseOverrideFeeMock.sol (1), src/mocks/general/LimitOrderHookMock.sol (1), src/mocks/general/ReHypothecationERC4626Mock.sol (1), src/mocks/general/ReHypothecationNativeMock.sol (1), src/mocks/oracles/panoptic/BaseOracleHookMock.sol (1), src/mocks/oracles/panoptic/OracleHookWithV3AdaptersMock.sol (1)
   hookrisk: 2 finding(s); analysed 16 hook contract(s); permissions resolved from the profile
   hookrisk: ok
   harness: ok
-  scan: finished in 7830ms, exit 0
+  scan: finished in 10028ms, exit 0

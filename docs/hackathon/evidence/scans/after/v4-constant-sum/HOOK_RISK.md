@@ -6,8 +6,6 @@
 
 ✅ **Gate passed.**
 
-> ℹ️ tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
-
 ## What was assessed
 
 | | |
@@ -20,7 +18,7 @@
 
 | Metric | Value |
 | --- | --- |
-| Callbacks implemented (count) | 1 |
+| Callbacks implemented (working; deliberate revert-guards are listed as disabled) | 1 |
 | Callbacks declared | 2 |
 | State writes in callbacks | 0 |
 | External calls in the swap path | 2 |
@@ -45,7 +43,7 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 | Autonomous parameter updates | — | unmeasured | _unmeasured_ ᵃ |
 | Price impacting behavior | 3/3 | measured | Returns a swap delta (custom curve or NoOp), or adjusts fees without a ceiling ᵃ |
 
-ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](FEEDBACK.md) #2.
+ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
 ### Feature triggers
 
@@ -82,13 +80,13 @@ Counter (src/Counter.sol#18-127) declares custom-accounting permissions: `before
 
 Reported by: `hookrisk/hookrisk-custom-accounting`
 
-### ℹ️ Counter._beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/Counter.sol#87-94) overrides `beforeAddLiquidity` with `revert "No...
+### ℹ️ Counter._beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/Counter.sol#87-94) overrides `beforeAddLiquidity` with `revert "No …
 
 `callback-intentionally-disabled` (`beforeAddLiquidity`) · **info** · confidence **high** · **corroborated by multiple engines**
 
 `src/Counter.sol:87`
 
-Counter._beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/Counter.sol#87-94) overrides `beforeAddLiquidity` with `revert "No v4 Liquidity allowed"`, so PoolManager-routed liquidity addition is disabled by design. The harness will observe reverts there; this is not the missing implementation HS-02 reports.
+Counter._beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/Counter.sol#87-94) overrides `beforeAddLiquidity` with `revert "No v4 Liquidity allowed"`, so PoolManager-routed liquidity addition is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports.
 
 Reported by: `hookrisk/hookrisk-disabled-callback`, `harness/seed-reverted`
 
@@ -96,8 +94,8 @@ Reported by: `hookrisk/hookrisk-disabled-callback`, `harness/seed-reverted`
 
 | | Invariant | Result | Detail |
 | --- | --- | --- | --- |
-| ⚠️ | I1 Conservation and solvency | inconclusive | passed vacuously: 0 swaps landed and 0 positions opened across 1285 sequences; the hook rejected PoolManager liquidity (Error("No v4 Liquidity allowed")) so the pool never traded; a swap that worked without the hook reverted with it in 1285 sequence(s). Observed: 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s). |
-| ⚠️ | I2 Price monotonicity (custom curve) | inconclusive | passed vacuously: 0 price checks across 1285 sequences; the hook rejected PoolManager liquidity (Error("No v4 Liquidity allowed")) so the pool never traded; a swap that worked without the hook reverted with it in 1285 sequence(s). Observed: 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s). Output comparison against an unhooked pool does not apply to a custom-curve hook; price monotonicity was asserted instead. |
+| ⚠️ | I1 Conservation and solvency | inconclusive | inconclusive, nothing relevant was observed: 0 swaps landed and 0 positions opened across 1285 sequences; the hook rejected PoolManager liquidity (Error("No v4 Liquidity allowed")) so the pool never traded; a swap that worked without the hook reverted with it in 1285 sequence(s). Observed: 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s). |
+| ⚠️ | I2 Price monotonicity (custom curve) | inconclusive | inconclusive, nothing relevant was observed: 0 price checks across 1285 sequences; the hook rejected PoolManager liquidity (Error("No v4 Liquidity allowed")) so the pool never traded; a swap that worked without the hook reverted with it in 1285 sequence(s). Observed: 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s). Output comparison against an unhooked pool does not apply to a custom-curve hook; price monotonicity was asserted instead. |
 | ➖ | I3 Exit liveness | not-applicable | PoolManager liquidity is disabled by design: hookrisk classifies beforeAddLiquidity as intentionally disabled and the harness's seed position was rejected with Error("No v4 Liquidity allowed"). No position can exist on the hooked pool, so exit liveness has nothing to assert; liquidity held through the hook's own path is not exercised. The harness opened 0 position(s). |
 
 ## Analysis coverage

@@ -126,6 +126,10 @@ const DIMENSION_RULES: Record<string, DimensionRule> = {
   },
   priceImpactingBehavior: {
     raisedBy: ['custom-accounting', 'unbounded-dynamic-fee'],
+    // 3 only when the delta touches a *swap* (before/afterSwapReturnDelta). A
+    // liquidity-only returns-delta (after{Add,Remove}LiquidityReturnDelta)
+    // adjusts what an LP settles, never a swap price, and the swap comparison
+    // (I2) still applies to it; see adjustForLiquidityOnlyDelta.
     scoreFor: { 'custom-accounting': 3, 'unbounded-dynamic-fee': 2 },
     rationale:
       'A returns-delta permission lets the hook alter settled amounts, which is the framework’s definition of price-impacting behaviour.',
@@ -499,4 +503,25 @@ function coverageGaps(
     }
   }
   return gaps;
+}
+
+/**
+ * True when the target's resolved permissions carry a returns-delta flag on a
+ * liquidity callback but none on a swap. Read from the hook profile, the only
+ * place the resolved (inheritance-followed) set lives on the static side.
+ */
+function liquidityOnlyDelta(findings: Finding[], contractName?: string): boolean {
+  const profile = hookProfileOf(findings, contractName)?.profile;
+  const p = profile?.permissions;
+  if (!p) return false;
+  const swap = Boolean(p.beforeSwapReturnDelta) || Boolean(p.afterSwapReturnDelta);
+  const liquidity = Boolean(p.afterAddLiquidityReturnDelta) || Boolean(p.afterRemoveLiquidityReturnDelta);
+  return liquidity && !swap;
+}
+
+function externalCallsInSwapPath(findings: Finding[], contractName?: string): number | null {
+  const profile = hookProfileOf(findings, contractName)?.profile;
+  const metrics = profile ? profileMetrics(profile) : null;
+  const value = metrics?.externalCallsInSwapPath;
+  return typeof value === 'number' ? value : null;
 }

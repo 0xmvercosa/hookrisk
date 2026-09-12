@@ -5,9 +5,8 @@
 > **Tier is undetermined.** 13/33 from what could be measured, up to 25/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
 ❌ **Gate failed.**
-- 1 finding(s) at or above high: V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never c...
-
-> ℹ️ tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
+- the differential harness failed: harness setUp failed: TwinPools: hook constructor reverted: 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).
+- 1 finding(s) at or above high: V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never …
 
 ## What was assessed
 
@@ -21,7 +20,7 @@
 
 | Metric | Value |
 | --- | --- |
-| Callbacks implemented (count) | 2 |
+| Callbacks implemented (working; deliberate revert-guards are listed as disabled) | 2 |
 | Callbacks declared | 4 |
 | State writes in callbacks | 2 |
 | External calls in the swap path | 4 |
@@ -46,7 +45,7 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 | Autonomous parameter updates | — | unmeasured | _unmeasured_ ᵃ |
 | Price impacting behavior | 3/3 | measured | Returns a swap delta (custom curve or NoOp), or adjusts fees without a ceiling ᵃ |
 
-ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](FEEDBACK.md) #2.
+ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
 ### Feature triggers
 
@@ -73,7 +72,7 @@ These apply regardless of the total score — the framework's own safeguard agai
 
 ## Findings
 
-### 🟠 V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never c...
+### 🟠 V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never …
 
 `unprotected-hook-callback` (`afterSwap`) · **high** · confidence **high**
 
@@ -93,7 +92,7 @@ V2PairHook (src/V2PairHook.sol#21-284) declares custom-accounting permissions: `
 
 Reported by: `hookrisk/hookrisk-custom-accounting`
 
-### ℹ️ V2PairHook (src/V2PairHook.sol#21-284) implements afterAddLiquidity, afterInitialize, afterRemoveLiquidity, beforeAddLiquidity, beforeInitialize, beforeRemov...
+### ℹ️ V2PairHook (src/V2PairHook.sol#21-284) implements afterAddLiquidity, afterInitialize, afterRemoveLiquidity, beforeAddLiquidity, beforeInitialize, …
 
 `unsupported-hook-abi` (`partial`) · **info** · confidence **high**
 

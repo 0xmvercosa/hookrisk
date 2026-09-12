@@ -6,8 +6,6 @@
 
 ✅ **Gate passed.**
 
-> ℹ️ tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (6 dimension(s) unmeasured: customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
-
 ## What was assessed
 
 | | |
@@ -20,7 +18,7 @@
 
 | Metric | Value |
 | --- | --- |
-| Callbacks implemented (count) | 2 |
+| Callbacks implemented (working; deliberate revert-guards are listed as disabled) | 2 |
 | Callbacks declared | 2 |
 | State writes in callbacks | 6 |
 | External calls in the swap path | 3 |
@@ -45,7 +43,7 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 | Autonomous parameter updates | — | unmeasured | _unmeasured_ ᵃ |
 | Price impacting behavior | — | unmeasured | _unmeasured_ ᵃ |
 
-ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](FEEDBACK.md) #2.
+ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
 ## Security plan
 
@@ -59,7 +57,7 @@ Complexity is derived from these metrics; the rule that fired is in the score ta
 
 ## Findings
 
-None.
+None beyond the hook profile under "What was assessed". The engine table below counts that profile as one informational finding.
 
 ## Invariants
 
@@ -76,7 +74,7 @@ None.
 | hookrisk Slither detectors | ok | 1 |  |
 | Differential harness (Foundry) | ok | 0 |  |
 
-The harness executed 13315 swap(s) (13315 compared against the reference pool, 0 skipped), opened 6765 and closed 6765 position(s), made 7045 donation(s) and ran 13315 price check(s) over 1285 sequence(s). An invariant with no relevant observations is reported inconclusive, not passed.
+The harness executed 13720 swap(s) (13720 compared against the reference pool, 0 skipped), opened 6400 and closed 6400 position(s), made 7140 donation(s) and ran 13720 price check(s) over 1285 sequence(s). An invariant with no relevant observations is reported inconclusive, not passed.
 
 > ⚠️ **3 function(s) were not analysed.** Slither could not lift them to IR and continued silently. Findings below do not cover them — this is not the same as those functions being clean. See `HR-E205`.
 

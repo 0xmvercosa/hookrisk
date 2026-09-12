@@ -62,8 +62,8 @@ problems in one shot and tells you which are fatal:
 | [`HR-E301`](#hr-e301) | `40` | Differential harness could not deploy the hook at a flag-bearing address |
 | [`HR-E302`](#hr-e302) | `41` | Invariant run found a counterexample |
 | [`HR-E303`](#hr-e303) | `42` | Harness timed out before completing its sequences |
-| [`HR-E304`](#hr-e304) | `43` | Differential harness could not set up the twin pools |
-| [`HR-E305`](#hr-e305) | `44` | Hook constructor arguments could not be derived |
+| [`HR-E304`](#hr-e304) | `2` | Differential harness could not set up the twin pools |
+| [`HR-E305`](#hr-e305) | `2` | Hook constructor arguments could not be derived |
 | [`HR-E401`](#hr-e401) | `50` | RPC endpoint is unset or unreachable |
 | [`HR-E402`](#hr-e402) | `50` | Explorer API rejected the request |
 | [`HR-E403`](#hr-e403) | `51` | Codehash changed between scan and report |
@@ -322,14 +322,6 @@ Exit code `30`.
 2. Confirm the build actually produced artifacts: `ls out/build-info` should contain a JSON file after `forge build --build-info`.
 3. If your project genuinely keeps tests beside sources, pass `--foundry-compile-all` so crytic-compile omits the skip flags.
 
-<details><summary>Raw output that maps to this code</summary>
-
-```text
-build-info is not a directory
-```
-
-</details>
-
 ---
 
 ### HR-E203
@@ -498,9 +490,9 @@ TIMEOUT
 
 **Differential harness could not set up the twin pools**
 
-Exit code `43`.
+Exit code `2`.
 
-**Why this happens.** The hook was deployed, but building the pools around it failed: pool initialisation or the initial PoolManager liquidity reverted inside a hook callback, or forge exited before running a single sequence. Nothing about the hook's behaviour was observed. hookrisk reports this as a harness failure with every invariant `inconclusive` — deliberately not `passed`, and deliberately not absent, because a dynamic layer that did not run must not look like one that ran and found nothing.
+**Why this happens.** The hook was deployed, but building the pools around it failed: pool initialisation or the initial PoolManager liquidity reverted inside a hook callback, or forge exited before running a single sequence. Nothing about the hook's behaviour was observed. hookrisk reports this as a harness failure with every invariant `inconclusive` — deliberately not `passed`, and deliberately not absent, because a dynamic layer that did not run must not look like one that ran and found nothing. This is an engine result recorded in the manifest (engines[].errorCode), not a CLI abort: the process exit code is decided by the gate, which fails on it by default (failOnNotAnalysed) and exits 2.
 
 **How to fix it.**
 
@@ -528,9 +520,9 @@ setUp\(\).*Failure
 
 **Hook constructor arguments could not be derived**
 
-Exit code `44`.
+Exit code `2`.
 
-**Why this happens.** The harness deploys the hook itself, so it has to supply whatever the constructor takes. It can derive two shapes on its own — no arguments, or a single `IPoolManager`/`address` — and needs to be told about anything else. This is reported as a skip with the ABI types in the message rather than guessed, because a constructor fed zero addresses produces a hook that reverts somewhere inside `setUp` for a reason nobody can read.
+**Why this happens.** The harness deploys the hook itself, so it has to supply whatever the constructor takes. It can derive two shapes on its own — no arguments, or a single `IPoolManager`/`address` — and needs to be told about anything else. This is reported as a skip with the ABI types in the message rather than guessed, because a constructor fed zero addresses produces a hook that reverts somewhere inside `setUp` for a reason nobody can read. This is an engine result recorded in the manifest (engines[].errorCode), not a CLI abort: the process exit code is decided by the gate, which fails on it by default (failOnNotAnalysed) and exits 2.
 
 **How to fix it.**
 

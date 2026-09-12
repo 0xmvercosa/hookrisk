@@ -49,7 +49,7 @@
     {
       "id": "6606e4883e7564da",
       "ruleClass": "hook-profile",
-      "title": "OrbitalHook (src/OrbitalHook.sol#18-476) is a recognised v4 hook: implements beforeSwap; declares 3 callback permission(s); 3 state write(s) reachable from c...",
+      "title": "OrbitalHook (src/OrbitalHook.sol#18-476) is a recognised v4 hook: implements beforeSwap; declares 3 callback permission(s); 3 state write(s) reachable from …",
       "description": "OrbitalHook (src/OrbitalHook.sol#18-476) is a recognised v4 hook: implements beforeSwap; declares 3 callback permission(s); 3 state write(s) reachable from callbacks; 3 external call(s) in the swap path.",
       "severity": "info",
       "confidence": "high",
@@ -101,8 +101,8 @@
     {
       "id": "090fb76d50093cbe",
       "ruleClass": "callback-intentionally-disabled",
-      "title": "OrbitalHook._beforeAddLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#325-335) overrides `beforeAddLiquidity` with `revert \"Use c...",
-      "description": "OrbitalHook._beforeAddLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#325-335) overrides `beforeAddLiquidity` with `revert \"Use custom addLiquidity\"`, so PoolManager-routed liquidity addition is disabled by design. The harness will observe reverts there; this is not the missing implementation HS-02 reports.",
+      "title": "OrbitalHook._beforeAddLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#325-335) overrides `beforeAddLiquidity` with `revert \"Use …",
+      "description": "OrbitalHook._beforeAddLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#325-335) overrides `beforeAddLiquidity` with `revert \"Use custom addLiquidity\"`, so PoolManager-routed liquidity addition is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports.",
       "severity": "info",
       "confidence": "high",
       "location": {
@@ -116,7 +116,7 @@
       },
       "discriminator": "beforeAddLiquidity",
       "evidence": [
-        "OrbitalHook._beforeAddLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#325-335) overrides `beforeAddLiquidity` with `revert \"Use custom addLiquidity\"`, so PoolManager-routed liquidity addition is disabled by design. The harness will observe reverts there; this is not the missing implementation HS-02 reports.",
+        "OrbitalHook._beforeAddLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#325-335) overrides `beforeAddLiquidity` with `revert \"Use custom addLiquidity\"`, so PoolManager-routed liquidity addition is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports.",
         "harness: the seed position was rejected in beforeAddLiquidity (0x259982e5) with Error(\"Use custom addLiquidity\") [selector 0x08c379a0]"
       ],
       "engines": [
@@ -137,8 +137,8 @@
     {
       "id": "745d0b5a1b7e8c94",
       "ruleClass": "callback-intentionally-disabled",
-      "title": "OrbitalHook._beforeRemoveLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#338-345) overrides `beforeRemoveLiquidity` with `revert ...",
-      "description": "OrbitalHook._beforeRemoveLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#338-345) overrides `beforeRemoveLiquidity` with `revert \"Use custom removeLiquidity\"`, so PoolManager-routed liquidity removal is disabled by design. The harness will observe reverts there; this is not the missing implementation HS-02 reports.",
+      "title": "OrbitalHook._beforeRemoveLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#338-345) overrides `beforeRemoveLiquidity` with `revert …",
+      "description": "OrbitalHook._beforeRemoveLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#338-345) overrides `beforeRemoveLiquidity` with `revert \"Use custom removeLiquidity\"`, so PoolManager-routed liquidity removal is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports.",
       "severity": "info",
       "confidence": "high",
       "location": {
@@ -152,7 +152,7 @@
       },
       "discriminator": "beforeRemoveLiquidity",
       "evidence": [
-        "OrbitalHook._beforeRemoveLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#338-345) overrides `beforeRemoveLiquidity` with `revert \"Use custom removeLiquidity\"`, so PoolManager-routed liquidity removal is disabled by design. The harness will observe reverts there; this is not the missing implementation HS-02 reports."
+        "OrbitalHook._beforeRemoveLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#338-345) overrides `beforeRemoveLiquidity` with `revert \"Use custom removeLiquidity\"`, so PoolManager-routed liquidity removal is disabled by design; the differential harness records such reverts when it runs. This is not the missing implementation HS-02 reports."
       ],
       "engines": [
         {
@@ -465,7 +465,7 @@
       "version": "0.11.6",
       "status": "ok",
       "findingCount": 4,
-      "durationMs": 3272
+      "durationMs": 4921
     },
     {
       "engine": "harness",
@@ -473,7 +473,7 @@
       "version": "1.7.1",
       "status": "ok",
       "findingCount": 0,
-      "durationMs": 4028
+      "durationMs": 5481
     }
   ],
   "coverage": {
@@ -529,6 +529,7 @@
       "afterAddLiquidityReturnDelta": false,
       "afterRemoveLiquidityReturnDelta": false
     },
+    "disagreement": [],
     "harnessRun": {
       "flags": 2696,
       "permissionsDerived": true,
@@ -546,7 +547,7 @@
       "runs": 256,
       "calls": 8192,
       "reverts": 0,
-      "detail": "passed vacuously: 0 swaps landed and 0 positions opened across 1285 sequences; the hook rejected PoolManager liquidity (Error(\"Use custom addLiquidity\")) so the pool never traded; a swap that worked without the hook reverted with it in 1285 sequence(s). Observed: 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s)."
+      "detail": "inconclusive, nothing relevant was observed: 0 swaps landed and 0 positions opened across 1285 sequences; the hook rejected PoolManager liquidity (Error(\"Use custom addLiquidity\")) so the pool never traded; a swap that worked without the hook reverted with it in 1285 sequence(s). Observed: 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s)."
     },
     {
       "id": "I2",
@@ -555,7 +556,7 @@
       "runs": 256,
       "calls": 8192,
       "reverts": 0,
-      "detail": "passed vacuously: 0 price checks across 1285 sequences; the hook rejected PoolManager liquidity (Error(\"Use custom addLiquidity\")) so the pool never traded; a swap that worked without the hook reverted with it in 1285 sequence(s). Observed: 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s). Output comparison against an unhooked pool does not apply to a custom-curve hook; price monotonicity was asserted instead."
+      "detail": "inconclusive, nothing relevant was observed: 0 price checks across 1285 sequences; the hook rejected PoolManager liquidity (Error(\"Use custom addLiquidity\")) so the pool never traded; a swap that worked without the hook reverted with it in 1285 sequence(s). Observed: 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s). Output comparison against an unhooked pool does not apply to a custom-curve hook; price monotonicity was asserted instead."
     },
     {
       "id": "I3",
@@ -566,11 +567,9 @@
   ],
   "gate": {
     "passed": true,
-    "maxTier": "medium",
     "maxSeverity": "high",
-    "failures": [],
-    "notes": [
-      "tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
-    ]
+    "failOnInconclusive": false,
+    "failOnNotAnalysed": true,
+    "failures": []
   }
 }

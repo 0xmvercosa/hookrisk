@@ -1013,7 +1013,7 @@ function downgradeVacuousPass(invariant: InvariantResult, options: TranslateOpti
 
   invariant.status = 'inconclusive';
   invariant.detail =
-    `passed vacuously: ${vacuous} across ${sequences} sequences` +
+    `inconclusive, nothing relevant was observed: ${vacuous} across ${sequences} sequences` +
     (why.length ? `; ${why.join('; ')}` : '') +
     `. Observed: ${summariseObservations(options.observations!)}.` +
     (invariant.detail ? ` ${invariant.detail}` : '');

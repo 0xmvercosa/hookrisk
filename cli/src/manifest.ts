@@ -188,14 +188,19 @@ export function buildManifest(input: ManifestInputs): Manifest {
       input.findings,
       input.uncoveredFunctions,
       input.invariants ?? [],
+      input.engineResults,
+      input.harness,
     );
   }
 
   return manifest;
 }
 
+// Skips carry a code too (HR-E305 for missing constructor arguments): a CI
+// job branching on why the dynamic layer did not run should not have to parse
+// prose.
 const harnessErrorCode = (harness: HarnessSummary): string | undefined =>
-  harness.status === 'failed' ? (harness.errorCode ?? errorCodeOf(harness.reason)) : undefined;
+  harness.status === 'ok' ? undefined : (harness.errorCode ?? errorCodeOf(harness.reason));
 
 function serialiseFinding(finding: Finding): Record<string, unknown> {
   return {
@@ -282,10 +287,34 @@ export function evaluateGate(
   findings: Finding[],
   uncovered: UncoveredFunction[],
   invariants: InvariantResult[],
+  engineResults: EngineResult[] = [],
+  harness?: HarnessSummary,
 ): Record<string, unknown> {
   const failures: string[] = [];
   const notes: string[] = [];
   const tierRank = { low: 0, medium: 1, high: 2 } as const;
+
+  // "Could not assess" is not "assessed clean". An engine that ran and FAILED
+  // (Slither could not compile the project, the harness could not stand the
+  // hook up), or a static engine that ran and never recognised the target as
+  // a hook, leaves the report describing nothing; letting that pass a CI gate
+  // is the exact failure this tool exists to prevent. A *skipped* engine is
+  // different: the reason is recorded and the operator chose it.
+  if (policy.failOnNotAnalysed !== false) {
+    for (const result of engineResults) {
+      if (result.status === 'failed') {
+        failures.push(`engine ${result.engine} failed${result.reason ? `: ${firstLine(result.reason)}` : ''}`);
+      } else if (result.status === 'ok' && result.scope && result.scope.targetAnalysed === false) {
+        failures.push(
+          `engine ${result.engine} did not analyse the target: it was not recognised as a v4 hook ` +
+            '(unsupported ABI), so nothing code-derived was assessed',
+        );
+      }
+    }
+    if (harness && harness.status === 'failed') {
+      failures.push(`the differential harness failed${harness.reason ? `: ${firstLine(harness.reason)}` : ''}`);
+    }
+  }
 
   // A violated invariant fails the gate unconditionally, whatever the tier says
   // and whatever thresholds are configured. It is the strongest evidence
@@ -357,6 +386,7 @@ export function evaluateGate(
     ...(policy.maxTier ? { maxTier: policy.maxTier } : {}),
     ...(policy.maxSeverity ? { maxSeverity: policy.maxSeverity } : {}),
     ...(policy.failOnInconclusive !== undefined ? { failOnInconclusive: policy.failOnInconclusive } : {}),
+    failOnNotAnalysed: policy.failOnNotAnalysed !== false,
     failures,
     ...(notes.length > 0 ? { notes } : {}),
   };
@@ -418,7 +448,7 @@ const SEVERITY_ICON: Record<Severity, string> = {
 
 /** Report labels for the hook-profile metrics; unknown metrics render by name. */
 const PROFILE_METRIC_LABEL: Record<string, string> = {
-  callbacksImplemented: 'Callbacks implemented (count)',
+  callbacksImplemented: 'Callbacks implemented (working; deliberate revert-guards are listed as disabled)',
   callbacksDeclared: 'Callbacks declared',
   stateWritesInCallbacks: 'State writes in callbacks',
   externalCallsInSwapPath: 'External calls in the swap path',
@@ -530,7 +560,7 @@ export function renderMarkdown(manifest: Manifest): string {
   out.push(
     'ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine ' +
       'dimensions; the rest are our reading of its prose. See ' +
-      '[FEEDBACK.md](FEEDBACK.md) #2.',
+      '[FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.',
     '',
   );
 
@@ -566,7 +596,12 @@ export function renderMarkdown(manifest: Manifest): string {
   out.push('## Findings', '');
   const listed = findings.filter((f) => f.ruleClass !== 'hook-profile');
   if (listed.length === 0) {
-    out.push('None.', '');
+    out.push(
+      findings.some((f) => f.ruleClass === 'hook-profile')
+        ? 'None beyond the hook profile under "What was assessed". The engine table below counts that profile as one informational finding.'
+        : 'None.',
+      '',
+    );
   } else {
     for (const f of listed) {
       const severity = f.severity as Severity;
@@ -698,3 +733,5 @@ export function worstSeverity(findings: Finding[]): Severity | null {
 }
 
 export { SEVERITIES };
+
+const firstLine = (text: string): string => text.split('\n')[0]?.trim().slice(0, 200) ?? '';

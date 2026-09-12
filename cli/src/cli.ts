@@ -409,10 +409,20 @@ async function commandScan(argv: string[]): Promise<number> {
 
   if (outcome) {
     invariants = outcome.invariants;
+    // "Run forge build first" is wrong advice when the build is what failed.
+    // The static engine already knows the project does not compile; say that.
+    const staticFailure = engineResults.find((r) => r.engine === 'hookrisk' && r.status === 'failed');
+    const reason =
+      outcome.status === 'skipped' && staticFailure && /no compiled artifact/.test(outcome.reason ?? '')
+        ? `the project does not compile (static engine: ${staticFailure.reason?.split('\n')[0] ?? 'failed'}), so there is no artifact to run`
+        : outcome.reason;
+    if (reason !== outcome.reason) {
+      for (const inv of invariants) if (inv.status === 'skipped') inv.detail = reason;
+    }
     harness = {
       version: outcome.version,
       status: outcome.status,
-      ...(outcome.reason ? { reason: outcome.reason } : {}),
+      ...(reason ? { reason } : {}),
       durationMs: outcome.durationMs,
     };
     const harnessErrorCode = errorCodeFor(outcome.reason);
@@ -437,8 +447,8 @@ async function commandScan(argv: string[]): Promise<number> {
         const differing = Object.keys(FLAG_BITS).filter(
           (field) => Boolean(staticResult.permissions![field]) !== Boolean(runtime[field]),
         );
+        permissionsSection.disagreement = differing;
         if (differing.length > 0) {
-          permissionsSection.disagreement = differing;
           log.event('warn', 'reconcile',
             `permissions: static analysis and the deployed runtime disagree on ${differing.join(', ')}`,
             { differing });
@@ -571,15 +581,17 @@ function printSummary(
   );
 
   const bySeverity = new Map<string, number>();
+  let profiles = 0;
   for (const f of findings) {
+    if (f.ruleClass === 'hook-profile') { profiles += 1; continue; }
     const key = String(f.severity);
     bySeverity.set(key, (bySeverity.get(key) ?? 0) + 1);
   }
   if (bySeverity.size > 0) {
     const parts = [...bySeverity.entries()].map(([sev, n]) => `${n} ${sev}`);
-    out.write(`  findings    ${parts.join(', ')}\n`);
+    out.write(`  findings    ${parts.join(', ')}${profiles ? ` (+ hook profile)` : ''}\n`);
   } else {
-    out.write('  findings    none\n');
+    out.write(`  findings    none${profiles ? ' (hook profile only)' : ''}\n`);
   }
 
   const corroborated = Number(coverage.corroboratedFindings ?? 0);
