@@ -1,11 +1,12 @@
 # Hook Risk Report
 
-**MEDIUM risk** — 9/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
+**MEDIUM risk** — 13/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
 
-> **Tier is undetermined.** 9/33 from what could be measured, up to 26/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
+> **Tier is undetermined.** 13/33 from what could be measured, up to 25/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
-❌ **Gate failed.**
-- tier is undetermined between Medium Risk and High Risk; the upper bound exceeds the configured maximum of medium
+✅ **Gate passed.**
+
+> ℹ️ tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
 
 ## What was assessed
 
@@ -15,11 +16,26 @@
 | Source | `src/mocks/general/AntiSandwichMock.sol` |
 | Mode | source |
 
+### Hook profile
+
+| Metric | Value |
+| --- | --- |
+| Callbacks implemented (count) | 2 |
+| Callbacks declared | 2 |
+| State writes in callbacks | 6 |
+| External calls in the swap path | 2 |
+| Internal functions reachable from callbacks | 9 |
+| Returns a delta | true |
+| Owner-only surface | false |
+| Permissions declared | `beforeSwap`, `afterSwap`, `afterSwapReturnDelta` |
+
+Complexity is derived from these metrics; the rule that fired is in the score table’s evidence.
+
 ## Score
 
 | Dimension | Score | Source | Bracket |
 | --- | --- | --- | --- |
-| Complexity | — | unmeasured | _unmeasured_ ᵃ |
+| Complexity | 4/5 | measured | Returns a delta and makes an external call in the swap path ᵃ |
 | Custom math | 3/5 | measured | A custom curve or invariant function ᵃ |
 | External dependencies | — | unmeasured | _unmeasured_ ᵃ |
 | External liquidity exposure | — | unmeasured | _unmeasured_ ᵃ |
@@ -78,8 +94,10 @@ Reported by: `hookrisk/hookrisk-custom-accounting`
 
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
-| hookrisk Slither detectors | ok | 1 |  |
+| hookrisk Slither detectors | ok | 2 |  |
 | Differential harness (Foundry) | ok | 0 |  |
+
+The harness executed 13900 swap(s) (13900 compared against the reference pool, 0 skipped), opened 6690 and closed 6690 position(s), made 6710 donation(s) and ran 13900 price check(s) over 1285 sequence(s). An invariant with no relevant observations is reported inconclusive, not passed.
 
 > ⚠️ **3 function(s) were not analysed.** Slither could not lift them to IR and continued silently. Findings below do not cover them — this is not the same as those functions being clean. See `HR-E205`.
 
@@ -89,7 +107,7 @@ Reported by: `hookrisk/hookrisk-custom-accounting`
 
 ## Warnings
 
-- 5 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
+- 4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
 - trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured
 - trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured
 - trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured

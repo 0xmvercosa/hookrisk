@@ -33,6 +33,10 @@ const SECURITY_SEVERITY: Record<Severity, string> = {
 };
 
 const RULE_HELP: Record<string, { name: string; description: string }> = {
+  'hook-profile': {
+    name: 'Hook profile',
+    description: 'Per-contract profile: resolved permissions, implemented callbacks, complexity metrics. Informational.',
+  },
   'unprotected-hook-callback': {
     name: 'Unprotected hook callback',
     description:

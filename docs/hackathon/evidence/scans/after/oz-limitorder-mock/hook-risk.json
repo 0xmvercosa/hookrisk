@@ -13,10 +13,63 @@
     "artifactDir": "out",
     "projectConfigSource": "forge-config"
   },
-  "findings": [],
+  "findings": [
+    {
+      "id": "ee7b358b6882aca5",
+      "ruleClass": "hook-profile",
+      "title": "LimitOrderHookMock (src/mocks/general/LimitOrderHookMock.sol#10-15) is a recognised v4 hook: implements afterInitialize, afterSwap; declares 2 callback permi...",
+      "description": "LimitOrderHookMock (src/mocks/general/LimitOrderHookMock.sol#10-15) is a recognised v4 hook: implements afterInitialize, afterSwap; declares 2 callback permission(s); 6 state write(s) reachable from callbacks; 3 external call(s) in the swap path.",
+      "severity": "info",
+      "confidence": "high",
+      "location": {
+        "file": "src/mocks/general/LimitOrderHookMock.sol",
+        "line": 10,
+        "endLine": 15
+      },
+      "evidence": [
+        "LimitOrderHookMock (src/mocks/general/LimitOrderHookMock.sol#10-15) is a recognised v4 hook: implements afterInitialize, afterSwap; declares 2 callback permission(s); 6 state write(s) reachable from callbacks; 3 external call(s) in the swap path."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-hook-profile",
+          "severity": "info",
+          "confidence": "high"
+        }
+      ],
+      "informsDimensions": [
+        "complexity"
+      ],
+      "metrics": {
+        "callbacksImplemented": 2,
+        "callbacksDeclared": 2,
+        "stateWritesInCallbacks": 6,
+        "externalCallsInSwapPath": 3,
+        "internalFunctionsReachableFromCallbacks": 9,
+        "usesReturnsDelta": false,
+        "hasOwnerOnlyFunctions": false
+      },
+      "permissions": {
+        "beforeInitialize": false,
+        "afterInitialize": true,
+        "beforeAddLiquidity": false,
+        "afterAddLiquidity": false,
+        "beforeRemoveLiquidity": false,
+        "afterRemoveLiquidity": false,
+        "beforeSwap": false,
+        "afterSwap": true,
+        "beforeDonate": false,
+        "afterDonate": false,
+        "beforeSwapReturnDelta": false,
+        "afterSwapReturnDelta": false,
+        "afterAddLiquidityReturnDelta": false,
+        "afterRemoveLiquidityReturnDelta": false
+      }
+    }
+  ],
   "score": {
-    "total": 3,
-    "totalUpperBound": 28,
+    "total": 6,
+    "totalUpperBound": 26,
     "tier": "low",
     "tierUpperBound": "high",
     "inconclusive": true,
@@ -29,13 +82,15 @@
       {
         "id": "complexity",
         "name": "Complexity",
-        "value": null,
+        "value": 3,
         "max": 5,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "Returns a delta, or makes an external call in the swap path",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: hookrisk has no complexity metric yet. HS-01 and HS-02 only establish a floor of 1 when they fire, and neither fired; that silence says nothing about how much state the callbacks branch on. Declare complexity in hookrisk.toml to score it."
+          "hook-profile metrics: callbacksImplemented=2, callbacksDeclared=2, stateWritesInCallbacks=6, externalCallsInSwapPath=3, internalFunctionsReachableFromCallbacks=9, usesReturnsDelta=false, hasOwnerOnlyFunctions=false",
+          "Scored 3 by rule `usesReturnsDelta || externalCallsInSwapPath >= 1`: Either a returns-delta permission or an external call in the swap path is a 'multi-step flow' in the prose's sense: the callback's effect is not local to itself. (hookrisk’s interpretation; the framework publishes no brackets)",
+          "The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target."
         ]
       },
       {
@@ -194,7 +249,7 @@
       }
     ],
     "warnings": [
-      "7 dimension(s) unmeasured: the tier is between Low Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
+      "6 dimension(s) unmeasured: the tier is between Low Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
       "trigger 'custom-math' could not be evaluated: dimension 'customMath' is unmeasured",
       "trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured",
       "trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured",
@@ -209,8 +264,8 @@
       "displayName": "hookrisk Slither detectors",
       "version": "0.11.6",
       "status": "ok",
-      "findingCount": 0,
-      "durationMs": 7418
+      "findingCount": 1,
+      "durationMs": 7694
     },
     {
       "engine": "harness",
@@ -218,7 +273,7 @@
       "version": "1.7.1",
       "status": "ok",
       "findingCount": 0,
-      "durationMs": 5313
+      "durationMs": 4243
     }
   ],
   "coverage": {
@@ -242,9 +297,38 @@
     ],
     "staticAnalysisSkipped": false,
     "dynamicAnalysisSkipped": false,
-    "harnessStatus": "ok"
+    "harnessStatus": "ok",
+    "observations": {
+      "swapsExecuted": 13315,
+      "swapsCompared": 13315,
+      "swapsSkipped": 0,
+      "hookedSwapReverted": 0,
+      "positionsOpened": 6765,
+      "positionsClosed": 6765,
+      "donations": 7045,
+      "priceChecks": 13315,
+      "monotonicityViolations": 0,
+      "exitFailures": 0,
+      "sequences": 1285
+    }
   },
   "permissions": {
+    "fromEngine": {
+      "beforeInitialize": false,
+      "afterInitialize": true,
+      "beforeAddLiquidity": false,
+      "afterAddLiquidity": false,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": false,
+      "beforeSwap": false,
+      "afterSwap": true,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnDelta": false,
+      "afterSwapReturnDelta": false,
+      "afterAddLiquidityReturnDelta": false,
+      "afterRemoveLiquidityReturnDelta": false
+    },
     "fromRuntime": {
       "beforeInitialize": false,
       "afterInitialize": true,
@@ -296,11 +380,12 @@
     }
   ],
   "gate": {
-    "passed": false,
+    "passed": true,
     "maxTier": "medium",
     "maxSeverity": "high",
-    "failures": [
-      "tier is undetermined between Low Risk and High Risk; the upper bound exceeds the configured maximum of medium"
+    "failures": [],
+    "notes": [
+      "tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (6 dimension(s) unmeasured: customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
     ]
   }
 }

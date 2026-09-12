@@ -1,11 +1,12 @@
 # Hook Risk Report
 
-**MEDIUM risk** — 9/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
+**MEDIUM risk** — 13/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
 
-> **Tier is undetermined.** 9/33 from what could be measured, up to 26/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
+> **Tier is undetermined.** 13/33 from what could be measured, up to 25/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
-❌ **Gate failed.**
-- tier is undetermined between Medium Risk and High Risk; the upper bound exceeds the configured maximum of medium
+✅ **Gate passed.**
+
+> ℹ️ tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
 
 ## What was assessed
 
@@ -15,11 +16,26 @@
 | Source | `src/WETHHook.sol` |
 | Mode | source |
 
+### Hook profile
+
+| Metric | Value |
+| --- | --- |
+| Callbacks implemented (count) | 2 |
+| Callbacks declared | 3 |
+| State writes in callbacks | 0 |
+| External calls in the swap path | 7 |
+| Internal functions reachable from callbacks | 13 |
+| Returns a delta | true |
+| Owner-only surface | false |
+| Permissions declared | `beforeInitialize`, `beforeAddLiquidity`, `beforeSwap`, `beforeSwapReturnDelta` |
+
+Complexity is derived from these metrics; the rule that fired is in the score table’s evidence.
+
 ## Score
 
 | Dimension | Score | Source | Bracket |
 | --- | --- | --- | --- |
-| Complexity | — | unmeasured | _unmeasured_ ᵃ |
+| Complexity | 4/5 | measured | Returns a delta and makes an external call in the swap path ᵃ |
 | Custom math | 3/5 | measured | A custom curve or invariant function ᵃ |
 | External dependencies | — | unmeasured | _unmeasured_ ᵃ |
 | External liquidity exposure | — | unmeasured | _unmeasured_ ᵃ |
@@ -78,7 +94,7 @@ Reported by: `hookrisk/hookrisk-custom-accounting`
 
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
-| hookrisk Slither detectors | ok | 1 |  |
+| hookrisk Slither detectors | ok | 2 |  |
 | Differential harness (Foundry) | skipped | 0 | WETHHook's constructor takes 2 argument(s) (address _manager, address _weth) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305. |
 
 > ⚠️ **26 function(s) were not analysed.** Slither could not lift them to IR and continued silently. Findings below do not cover them — this is not the same as those functions being clean. See `HR-E205`.
@@ -112,7 +128,7 @@ Reported by: `hookrisk/hookrisk-custom-accounting`
 
 ## Warnings
 
-- 5 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
+- 4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
 - trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured
 - trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured
 - trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured

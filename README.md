@@ -170,9 +170,12 @@ make demo         # scan a clean hook, then one with a planted bug
 In your own hook repository:
 
 ```bash
-npx hookrisk init                              # writes hookrisk.toml
+# hookrisk runs from a checkout; `make setup` is the install step.
+alias hookrisk="node /path/to/hookrisk/cli/dist/cli.js"
+
+hookrisk init                                  # writes hookrisk.toml
 forge build                                    # hookrisk reads your artifacts
-npx hookrisk scan src/MyHook.sol:MyHook
+hookrisk scan src/MyHook.sol:MyHook
 ```
 
 `hookrisk.toml` is where you declare what a tool cannot observe — team maturity,
@@ -191,12 +194,13 @@ is not, and the framework's central worry is that self-scoring is easy to game.
 
 Findings land on the diff via SARIF, the report becomes a PR comment, and the
 gate fails the job. Exit codes are meaningful: `0` passed, `2` gate failed (a
-result, not an error), `10+` hookrisk could not run — each code documented in
+result, not an error), `10+` hookrisk could not run, `64` bad command line — each code documented in
 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 hookrisk runs its own action against its own fixtures on every push
-([dogfood.yml](.github/workflows/dogfood.yml)), asserting a clean hook passes
-**and** a planted-bug hook fails. An action that passes everything is
+([dogfood.yml](.github/workflows/dogfood.yml)), asserting a clean hook passes,
+a planted-bug hook fails, **and** a hook the harness cannot stand up comes back
+inconclusive rather than clean. An action that passes everything is
 indistinguishable from one that does nothing.
 
 ---

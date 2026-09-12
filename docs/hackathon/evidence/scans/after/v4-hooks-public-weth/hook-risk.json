@@ -45,11 +45,63 @@
         "custom-math",
         "price-impact"
       ]
+    },
+    {
+      "id": "b679a0a144e04534",
+      "ruleClass": "hook-profile",
+      "title": "WETHHook (src/WETHHook.sol#12-54) is a recognised v4 hook: implements beforeInitialize, beforeSwap; declares 3 callback permission(s); 0 state write(s) reach...",
+      "description": "WETHHook (src/WETHHook.sol#12-54) is a recognised v4 hook: implements beforeInitialize, beforeSwap; declares 3 callback permission(s); 0 state write(s) reachable from callbacks; 7 external call(s) in the swap path.",
+      "severity": "info",
+      "confidence": "high",
+      "location": {
+        "file": "src/WETHHook.sol",
+        "line": 12,
+        "endLine": 54
+      },
+      "evidence": [
+        "WETHHook (src/WETHHook.sol#12-54) is a recognised v4 hook: implements beforeInitialize, beforeSwap; declares 3 callback permission(s); 0 state write(s) reachable from callbacks; 7 external call(s) in the swap path."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-hook-profile",
+          "severity": "info",
+          "confidence": "high"
+        }
+      ],
+      "informsDimensions": [
+        "complexity"
+      ],
+      "metrics": {
+        "callbacksImplemented": 2,
+        "callbacksDeclared": 3,
+        "stateWritesInCallbacks": 0,
+        "externalCallsInSwapPath": 7,
+        "internalFunctionsReachableFromCallbacks": 13,
+        "usesReturnsDelta": true,
+        "hasOwnerOnlyFunctions": false
+      },
+      "permissions": {
+        "beforeInitialize": true,
+        "afterInitialize": false,
+        "beforeAddLiquidity": true,
+        "afterAddLiquidity": false,
+        "beforeRemoveLiquidity": false,
+        "afterRemoveLiquidity": false,
+        "beforeSwap": true,
+        "afterSwap": false,
+        "beforeDonate": false,
+        "afterDonate": false,
+        "beforeSwapReturnDelta": true,
+        "afterSwapReturnDelta": false,
+        "afterAddLiquidityReturnDelta": false,
+        "afterRemoveLiquidityReturnDelta": false
+      }
     }
   ],
   "score": {
-    "total": 9,
-    "totalUpperBound": 26,
+    "total": 13,
+    "totalUpperBound": 25,
     "tier": "medium",
     "tierUpperBound": "high",
     "inconclusive": true,
@@ -62,13 +114,15 @@
       {
         "id": "complexity",
         "name": "Complexity",
-        "value": null,
+        "value": 4,
         "max": 5,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "Returns a delta and makes an external call in the swap path",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: hookrisk has no complexity metric yet. HS-01 and HS-02 only establish a floor of 1 when they fire, and neither fired; that silence says nothing about how much state the callbacks branch on. Declare complexity in hookrisk.toml to score it."
+          "hook-profile metrics: callbacksImplemented=2, callbacksDeclared=3, stateWritesInCallbacks=0, externalCallsInSwapPath=7, internalFunctionsReachableFromCallbacks=13, usesReturnsDelta=true, hasOwnerOnlyFunctions=false",
+          "Scored 4 by rule `usesReturnsDelta && externalCallsInSwapPath >= 1`: A hook that both alters settled amounts and leaves the swap path mid-flight has two interacting flows to reason about, not one. (hookrisk’s interpretation; the framework publishes no brackets)",
+          "The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target."
         ]
       },
       {
@@ -332,7 +386,7 @@
       }
     ],
     "warnings": [
-      "5 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
+      "4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
       "trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured",
       "trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured",
       "trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured",
@@ -345,8 +399,8 @@
       "displayName": "hookrisk Slither detectors",
       "version": "0.11.6",
       "status": "ok",
-      "findingCount": 1,
-      "durationMs": 11434
+      "findingCount": 2,
+      "durationMs": 10912
     },
     {
       "engine": "harness",
@@ -355,7 +409,7 @@
       "status": "skipped",
       "reason": "WETHHook's constructor takes 2 argument(s) (address _manager, address _weth) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305.",
       "findingCount": 0,
-      "durationMs": 10
+      "durationMs": 6
     }
   ],
   "coverage": {
@@ -496,6 +550,24 @@
     "dynamicAnalysisSkipped": true,
     "harnessStatus": "skipped"
   },
+  "permissions": {
+    "fromEngine": {
+      "beforeInitialize": true,
+      "afterInitialize": false,
+      "beforeAddLiquidity": true,
+      "afterAddLiquidity": false,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": false,
+      "beforeSwap": true,
+      "afterSwap": false,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnDelta": true,
+      "afterSwapReturnDelta": false,
+      "afterAddLiquidityReturnDelta": false,
+      "afterRemoveLiquidityReturnDelta": false
+    }
+  },
   "invariants": [
     {
       "id": "I1",
@@ -517,11 +589,12 @@
     }
   ],
   "gate": {
-    "passed": false,
+    "passed": true,
     "maxTier": "medium",
     "maxSeverity": "high",
-    "failures": [
-      "tier is undetermined between Medium Risk and High Risk; the upper bound exceeds the configured maximum of medium"
+    "failures": [],
+    "notes": [
+      "tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
     ]
   }
 }

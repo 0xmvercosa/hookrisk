@@ -118,54 +118,6 @@ const FALLBACK_OUT = 'out';
 // Permissions
 // --------------------------------------------------------------------------- //
 
-/**
- * Read the permission set a hook declares in `getHookPermissions()`.
- *
- * Parsed from source rather than obtained from Slither: the shape is a struct
- * literal of boolean fields, one regex covers every formatting style we have
- * seen, and it saves a second analysis pass just to learn fourteen bits.
- *
- * Only fields inside `getHookPermissions` are read, so an unrelated
- * `beforeSwap: true` elsewhere in the file cannot leak in. In deployed mode this
- * is not used at all — permissions come from the address, which is what the
- * PoolManager actually obeys.
- *
- * Returns null when the function is absent from this file, which is the normal
- * case for a hook that inherits it. That is not a reason to skip: the harness
- * can derive the flags from the compiled runtime code instead, see `runHarness`.
- */
-export function parseDeclaredPermissions(sourceText: string): Record<string, boolean> | null {
-  const start = sourceText.indexOf('getHookPermissions');
-  if (start < 0) return null;
-
-  // Bound the search to the function body by matching braces from the first `{`
-  // after the signature. Cheaper and more robust than trying to match the whole
-  // function with one expression.
-  const open = sourceText.indexOf('{', start);
-  if (open < 0) return null;
-
-  let depth = 0;
-  let end = open;
-  for (let i = open; i < sourceText.length; i += 1) {
-    if (sourceText[i] === '{') depth += 1;
-    else if (sourceText[i] === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        end = i;
-        break;
-      }
-    }
-  }
-
-  const body = sourceText.slice(open, end);
-  const permissions: Record<string, boolean> = {};
-  for (const match of body.matchAll(/(\w+)\s*[:=]\s*(true|false)\b/g)) {
-    const field = match[1]!;
-    if (field in FLAG_BITS) permissions[field] = match[2] === 'true';
-  }
-
-  return Object.keys(permissions).length > 0 ? permissions : null;
-}
 
 /** Compute the low-14-bit flag word from a permission set. */
 export function flagsFrom(permissions: Record<string, boolean>): number {

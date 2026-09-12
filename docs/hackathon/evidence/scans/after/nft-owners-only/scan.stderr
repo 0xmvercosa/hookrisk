@@ -1,28 +1,9 @@
+  scan: src/ERC721OwnershipHook.sol:ERC721OwnershipHook run=7a10ed46-c421-46a5-a58a-53c341c5456f
   project: out=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/nft-owners-only/repo/out solc=0.8.19 (artifact-metadata) artifact=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/nft-owners-only/repo/out/ERC721OwnershipHook.sol/ERC721OwnershipHook.json
   hookrisk: slither src/ERC721OwnershipHook.sol:ERC721OwnershipHook
   hookrisk: 3 finding(s) in other files, not attributed to this target: src/Counter.sol (1), src/implementation/CounterImplementation.sol (1), src/implementation/ERC721OwnershipHookImpl.sol (1)
   hookrisk: did not analyse the target — ERC721OwnershipHook uses a hook ABI hookrisk cannot analyse: ERC721OwnershipHook (src/ERC721OwnershipHook.sol#10-48) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 ge...
-  hookrisk: 1 finding(s)
+  hookrisk: 1 finding(s); analysed 0 hook contract(s)
+  hookrisk: ok
   harness: skipped — ERC721OwnershipHook's constructor takes 2 argument(s) (address _poolManager, address _nftContract) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305.
-
-LOW risk  3/33  (undetermined: up to 28/33)
-
-  findings    1 info
-  ✓ hookrisk   ok
-  - harness    skipped  ERC721OwnershipHook's constructor takes 2 argument(s) (address _poolManager, address _nftContract) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305.
-  invariants  I1 skipped, I2 skipped, I3 skipped
-  ! 7 dimension(s) unmeasured: the tier is between Low Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
-  ! trigger 'custom-math' could not be evaluated: dimension 'customMath' is unmeasured
-  ! trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured
-  ! trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured
-  ! trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured
-  ! trigger 'price-impact' could not be evaluated: dimension 'priceImpactingBehavior' is unmeasured
-  ! trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured
-
-  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/nft-owners-only/HOOK_RISK.md
-  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/nft-owners-only/hook-risk.json
-  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/nft-owners-only/hookrisk.sarif
-
-  gate failed
-    - tier is undetermined between Low Risk and High Risk; the upper bound exceeds the configured maximum of medium
-
+  scan: finished in 1992ms, exit 0

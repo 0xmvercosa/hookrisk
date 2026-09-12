@@ -5,7 +5,7 @@
  * reads identically whichever surface produced it. The catalogue is the source
  * of truth; this file is a reader, not a second copy.
  *
- * See `detectors/slither_hookrisk/utils/diagnostics.py` for the Python
+ * The Python detectors report findings only; classification is the CLI's
  * equivalent and `docs/TROUBLESHOOTING.md`, which is generated from the same
  * file.
  */

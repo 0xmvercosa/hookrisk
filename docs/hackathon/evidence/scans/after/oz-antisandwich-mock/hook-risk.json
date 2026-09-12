@@ -45,11 +45,63 @@
         "custom-math",
         "price-impact"
       ]
+    },
+    {
+      "id": "88f79523919f0f64",
+      "ruleClass": "hook-profile",
+      "title": "AntiSandwichMock (src/mocks/general/AntiSandwichMock.sol#15-50) is a recognised v4 hook: implements afterSwap, beforeSwap; declares 2 callback permission(s);...",
+      "description": "AntiSandwichMock (src/mocks/general/AntiSandwichMock.sol#15-50) is a recognised v4 hook: implements afterSwap, beforeSwap; declares 2 callback permission(s); 6 state write(s) reachable from callbacks; 2 external call(s) in the swap path.",
+      "severity": "info",
+      "confidence": "high",
+      "location": {
+        "file": "src/mocks/general/AntiSandwichMock.sol",
+        "line": 15,
+        "endLine": 50
+      },
+      "evidence": [
+        "AntiSandwichMock (src/mocks/general/AntiSandwichMock.sol#15-50) is a recognised v4 hook: implements afterSwap, beforeSwap; declares 2 callback permission(s); 6 state write(s) reachable from callbacks; 2 external call(s) in the swap path."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-hook-profile",
+          "severity": "info",
+          "confidence": "high"
+        }
+      ],
+      "informsDimensions": [
+        "complexity"
+      ],
+      "metrics": {
+        "callbacksImplemented": 2,
+        "callbacksDeclared": 2,
+        "stateWritesInCallbacks": 6,
+        "externalCallsInSwapPath": 2,
+        "internalFunctionsReachableFromCallbacks": 9,
+        "usesReturnsDelta": true,
+        "hasOwnerOnlyFunctions": false
+      },
+      "permissions": {
+        "beforeInitialize": false,
+        "afterInitialize": false,
+        "beforeAddLiquidity": false,
+        "afterAddLiquidity": false,
+        "beforeRemoveLiquidity": false,
+        "afterRemoveLiquidity": false,
+        "beforeSwap": true,
+        "afterSwap": true,
+        "beforeDonate": false,
+        "afterDonate": false,
+        "beforeSwapReturnDelta": false,
+        "afterSwapReturnDelta": true,
+        "afterAddLiquidityReturnDelta": false,
+        "afterRemoveLiquidityReturnDelta": false
+      }
     }
   ],
   "score": {
-    "total": 9,
-    "totalUpperBound": 26,
+    "total": 13,
+    "totalUpperBound": 25,
     "tier": "medium",
     "tierUpperBound": "high",
     "inconclusive": true,
@@ -62,13 +114,15 @@
       {
         "id": "complexity",
         "name": "Complexity",
-        "value": null,
+        "value": 4,
         "max": 5,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "Returns a delta and makes an external call in the swap path",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: hookrisk has no complexity metric yet. HS-01 and HS-02 only establish a floor of 1 when they fire, and neither fired; that silence says nothing about how much state the callbacks branch on. Declare complexity in hookrisk.toml to score it."
+          "hook-profile metrics: callbacksImplemented=2, callbacksDeclared=2, stateWritesInCallbacks=6, externalCallsInSwapPath=2, internalFunctionsReachableFromCallbacks=9, usesReturnsDelta=true, hasOwnerOnlyFunctions=false",
+          "Scored 4 by rule `usesReturnsDelta && externalCallsInSwapPath >= 1`: A hook that both alters settled amounts and leaves the swap path mid-flight has two interacting flows to reason about, not one. (hookrisk’s interpretation; the framework publishes no brackets)",
+          "The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target."
         ]
       },
       {
@@ -332,7 +386,7 @@
       }
     ],
     "warnings": [
-      "5 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
+      "4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
       "trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured",
       "trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured",
       "trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured",
@@ -345,8 +399,8 @@
       "displayName": "hookrisk Slither detectors",
       "version": "0.11.6",
       "status": "ok",
-      "findingCount": 1,
-      "durationMs": 7580
+      "findingCount": 2,
+      "durationMs": 7758
     },
     {
       "engine": "harness",
@@ -354,7 +408,7 @@
       "version": "1.7.1",
       "status": "ok",
       "findingCount": 0,
-      "durationMs": 5202
+      "durationMs": 5769
     }
   ],
   "coverage": {
@@ -378,9 +432,38 @@
     ],
     "staticAnalysisSkipped": false,
     "dynamicAnalysisSkipped": false,
-    "harnessStatus": "ok"
+    "harnessStatus": "ok",
+    "observations": {
+      "swapsExecuted": 13900,
+      "swapsCompared": 13900,
+      "swapsSkipped": 0,
+      "hookedSwapReverted": 0,
+      "positionsOpened": 6690,
+      "positionsClosed": 6690,
+      "donations": 6710,
+      "priceChecks": 13900,
+      "monotonicityViolations": 0,
+      "exitFailures": 0,
+      "sequences": 1285
+    }
   },
   "permissions": {
+    "fromEngine": {
+      "beforeInitialize": false,
+      "afterInitialize": false,
+      "beforeAddLiquidity": false,
+      "afterAddLiquidity": false,
+      "beforeRemoveLiquidity": false,
+      "afterRemoveLiquidity": false,
+      "beforeSwap": true,
+      "afterSwap": true,
+      "beforeDonate": false,
+      "afterDonate": false,
+      "beforeSwapReturnDelta": false,
+      "afterSwapReturnDelta": true,
+      "afterAddLiquidityReturnDelta": false,
+      "afterRemoveLiquidityReturnDelta": false
+    },
     "fromRuntime": {
       "beforeInitialize": false,
       "afterInitialize": false,
@@ -432,11 +515,12 @@
     }
   ],
   "gate": {
-    "passed": false,
+    "passed": true,
     "maxTier": "medium",
     "maxSeverity": "high",
-    "failures": [
-      "tier is undetermined between Medium Risk and High Risk; the upper bound exceeds the configured maximum of medium"
+    "failures": [],
+    "notes": [
+      "tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
     ]
   }
 }

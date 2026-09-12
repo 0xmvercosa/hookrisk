@@ -47,6 +47,58 @@
       ]
     },
     {
+      "id": "601dc5f2b90ee74c",
+      "ruleClass": "hook-profile",
+      "title": "Counter (src/Counter.sol#18-127) is a recognised v4 hook: implements beforeSwap; declares 2 callback permission(s); 0 state write(s) reachable from callbacks...",
+      "description": "Counter (src/Counter.sol#18-127) is a recognised v4 hook: implements beforeSwap; declares 2 callback permission(s); 0 state write(s) reachable from callbacks; 2 external call(s) in the swap path.",
+      "severity": "info",
+      "confidence": "high",
+      "location": {
+        "file": "src/Counter.sol",
+        "line": 18,
+        "endLine": 127
+      },
+      "evidence": [
+        "Counter (src/Counter.sol#18-127) is a recognised v4 hook: implements beforeSwap; declares 2 callback permission(s); 0 state write(s) reachable from callbacks; 2 external call(s) in the swap path."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-hook-profile",
+          "severity": "info",
+          "confidence": "high"
+        }
+      ],
+      "informsDimensions": [
+        "complexity"
+      ],
+      "metrics": {
+        "callbacksImplemented": 1,
+        "callbacksDeclared": 2,
+        "stateWritesInCallbacks": 0,
+        "externalCallsInSwapPath": 2,
+        "internalFunctionsReachableFromCallbacks": 3,
+        "usesReturnsDelta": true,
+        "hasOwnerOnlyFunctions": false
+      },
+      "permissions": {
+        "beforeInitialize": false,
+        "afterInitialize": false,
+        "beforeAddLiquidity": true,
+        "afterAddLiquidity": false,
+        "beforeRemoveLiquidity": false,
+        "afterRemoveLiquidity": false,
+        "beforeSwap": true,
+        "afterSwap": false,
+        "beforeDonate": false,
+        "afterDonate": false,
+        "beforeSwapReturnDelta": true,
+        "afterSwapReturnDelta": false,
+        "afterAddLiquidityReturnDelta": false,
+        "afterRemoveLiquidityReturnDelta": false
+      }
+    },
+    {
       "id": "a43cc8e88654b94b",
       "ruleClass": "callback-intentionally-disabled",
       "title": "Counter._beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/Counter.sol#87-94) overrides `beforeAddLiquidity` with `revert \"No...",
@@ -62,8 +114,10 @@
         "name": "_beforeAddLiquidity",
         "selector": "0x259982e5"
       },
+      "discriminator": "beforeAddLiquidity",
       "evidence": [
-        "Counter._beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/Counter.sol#87-94) overrides `beforeAddLiquidity` with `revert \"No v4 Liquidity allowed\"`, so PoolManager-routed liquidity addition is disabled by design. The harness will observe reverts there; this is not the missing implementation HS-02 reports."
+        "Counter._beforeAddLiquidity(address,PoolKey,IPoolManager.ModifyLiquidityParams,bytes) (src/Counter.sol#87-94) overrides `beforeAddLiquidity` with `revert \"No v4 Liquidity allowed\"`, so PoolManager-routed liquidity addition is disabled by design. The harness will observe reverts there; this is not the missing implementation HS-02 reports.",
+        "harness: the seed position was rejected in beforeAddLiquidity (0x259982e5) with Error(\"No v4 Liquidity allowed\") [selector 0x08c379a0]"
       ],
       "engines": [
         {
@@ -71,13 +125,19 @@
           "nativeRule": "hookrisk-disabled-callback",
           "severity": "info",
           "confidence": "high"
+        },
+        {
+          "engine": "harness",
+          "nativeRule": "seed-reverted",
+          "severity": "info",
+          "confidence": "high"
         }
       ]
     }
   ],
   "score": {
-    "total": 9,
-    "totalUpperBound": 26,
+    "total": 13,
+    "totalUpperBound": 25,
     "tier": "medium",
     "tierUpperBound": "high",
     "inconclusive": true,
@@ -90,13 +150,15 @@
       {
         "id": "complexity",
         "name": "Complexity",
-        "value": null,
+        "value": 4,
         "max": 5,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "Returns a delta and makes an external call in the swap path",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: hookrisk has no complexity metric yet. HS-01 and HS-02 only establish a floor of 1 when they fire, and neither fired; that silence says nothing about how much state the callbacks branch on. Declare complexity in hookrisk.toml to score it."
+          "hook-profile metrics: callbacksImplemented=1, callbacksDeclared=2, stateWritesInCallbacks=0, externalCallsInSwapPath=2, internalFunctionsReachableFromCallbacks=3, usesReturnsDelta=true, hasOwnerOnlyFunctions=false",
+          "Scored 4 by rule `usesReturnsDelta && externalCallsInSwapPath >= 1`: A hook that both alters settled amounts and leaves the swap path mid-flight has two interacting flows to reason about, not one. (hookrisk’s interpretation; the framework publishes no brackets)",
+          "The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target."
         ]
       },
       {
@@ -360,7 +422,7 @@
       }
     ],
     "warnings": [
-      "5 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
+      "4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
       "trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured",
       "trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured",
       "trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured",
@@ -373,8 +435,8 @@
       "displayName": "hookrisk Slither detectors",
       "version": "0.11.6",
       "status": "ok",
-      "findingCount": 2,
-      "durationMs": 1024
+      "findingCount": 3,
+      "durationMs": 1106
     },
     {
       "engine": "harness",
@@ -382,7 +444,7 @@
       "version": "1.7.1",
       "status": "ok",
       "findingCount": 0,
-      "durationMs": 4098
+      "durationMs": 4896
     }
   ],
   "coverage": {
@@ -390,10 +452,23 @@
     "uncoveredFunctions": [],
     "staticAnalysisSkipped": false,
     "dynamicAnalysisSkipped": false,
-    "harnessStatus": "ok"
+    "harnessStatus": "ok",
+    "observations": {
+      "swapsExecuted": 0,
+      "swapsCompared": 0,
+      "swapsSkipped": 0,
+      "hookedSwapReverted": 1285,
+      "positionsOpened": 0,
+      "positionsClosed": 0,
+      "donations": 0,
+      "priceChecks": 0,
+      "monotonicityViolations": 0,
+      "exitFailures": 0,
+      "sequences": 1285
+    }
   },
   "permissions": {
-    "fromSource": {
+    "fromEngine": {
       "beforeInitialize": false,
       "afterInitialize": false,
       "beforeAddLiquidity": true,
@@ -427,7 +502,7 @@
     },
     "harnessRun": {
       "flags": 2184,
-      "permissionsDerived": false,
+      "permissionsDerived": true,
       "customCurve": true,
       "dynamicFee": false,
       "seeded": "hooked-failed",
@@ -438,35 +513,35 @@
     {
       "id": "I1",
       "name": "Conservation and solvency",
-      "status": "passed",
+      "status": "inconclusive",
       "runs": 256,
       "calls": 8192,
-      "reverts": 0
+      "reverts": 0,
+      "detail": "passed vacuously: 0 swaps landed and 0 positions opened across 1285 sequences; the hook rejected PoolManager liquidity (Error(\"No v4 Liquidity allowed\")) so the pool never traded; a swap that worked without the hook reverted with it in 1285 sequence(s). Observed: 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s)."
     },
     {
       "id": "I2",
       "name": "Price monotonicity (custom curve)",
-      "status": "passed",
+      "status": "inconclusive",
       "runs": 256,
       "calls": 8192,
       "reverts": 0,
-      "detail": "Output comparison against an unhooked pool does not apply to a custom-curve hook; price monotonicity was asserted instead."
+      "detail": "passed vacuously: 0 price checks across 1285 sequences; the hook rejected PoolManager liquidity (Error(\"No v4 Liquidity allowed\")) so the pool never traded; a swap that worked without the hook reverted with it in 1285 sequence(s). Observed: 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s). Output comparison against an unhooked pool does not apply to a custom-curve hook; price monotonicity was asserted instead."
     },
     {
       "id": "I3",
       "name": "Exit liveness",
-      "status": "passed",
-      "runs": 256,
-      "calls": 8192,
-      "reverts": 0
+      "status": "not-applicable",
+      "detail": "PoolManager liquidity is disabled by design: hookrisk classifies beforeAddLiquidity as intentionally disabled and the harness's seed position was rejected with Error(\"No v4 Liquidity allowed\"). No position can exist on the hooked pool, so exit liveness has nothing to assert; liquidity held through the hook's own path is not exercised. The harness opened 0 position(s)."
     }
   ],
   "gate": {
-    "passed": false,
+    "passed": true,
     "maxTier": "medium",
     "maxSeverity": "high",
-    "failures": [
-      "tier is undetermined between Medium Risk and High Risk; the upper bound exceeds the configured maximum of medium"
+    "failures": [],
+    "notes": [
+      "tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
     ]
   }
 }

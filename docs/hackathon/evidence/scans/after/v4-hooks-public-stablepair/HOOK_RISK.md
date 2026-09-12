@@ -1,12 +1,13 @@
 # Hook Risk Report
 
-**LOW risk** — 4/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
+**LOW risk** — 5/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
 
-> **Tier is undetermined.** 4/33 from what could be measured, up to 24/33 if every unmeasured dimension were at its maximum — between low and high. Unmeasured dimensions are excluded from the total, never counted as zero.
+> **Tier is undetermined.** 5/33 from what could be measured, up to 25/33 if every unmeasured dimension were at its maximum — between low and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
 ❌ **Gate failed.**
-- tier is undetermined between Low Risk and High Risk; the upper bound exceeds the configured maximum of medium
 - 1 finding(s) at or above high: StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working `afterIni...
+
+> ℹ️ tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (6 dimension(s) unmeasured: customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
 
 ## What was assessed
 
@@ -16,11 +17,26 @@
 | Source | `src/stable/StablePairHook.sol` |
 | Mode | source |
 
+### Hook profile
+
+| Metric | Value |
+| --- | --- |
+| Callbacks implemented (count) | 4 |
+| Callbacks declared | 6 |
+| State writes in callbacks | 1 |
+| External calls in the swap path | 0 |
+| Internal functions reachable from callbacks | 9 |
+| Returns a delta | false |
+| Owner-only surface | false |
+| Permissions declared | `beforeInitialize`, `afterInitialize`, `beforeAddLiquidity`, `afterAddLiquidity`, `beforeSwap`, `afterSwap` |
+
+Complexity is derived from these metrics; the rule that fired is in the score table’s evidence.
+
 ## Score
 
 | Dimension | Score | Source | Bracket |
 | --- | --- | --- | --- |
-| Complexity | 1/5 | measured | 1-2 callbacks, no branching on hook state ᵃ |
+| Complexity | 2/5 | measured | Callbacks write hook state, or 3+ callbacks ᵃ |
 | Custom math | — | unmeasured | _unmeasured_ ᵃ |
 | External dependencies | — | unmeasured | _unmeasured_ ᵃ |
 | External liquidity exposure | — | unmeasured | _unmeasured_ ᵃ |
@@ -46,7 +62,7 @@
 
 ### 🟠 StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working `afterIni...
 
-`flag-implementation-divergence` · **high** · confidence **medium**
+`flag-implementation-divergence` (`afterInitialize`) · **high** · confidence **medium**
 
 `src/stable/StablePairHook.sol:25`
 
@@ -66,8 +82,8 @@ Reported by: `hookrisk/hookrisk-flag-divergence`
 
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
-| hookrisk Slither detectors | ok | 1 |  |
-| Differential harness (Foundry) | failed | 0 | harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
+| hookrisk Slither detectors | ok | 2 |  |
+| Differential harness (Foundry) | failed (HR-E304) | 0 | harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
 
 > ⚠️ **26 function(s) were not analysed.** Slither could not lift them to IR and continued silently. Findings below do not cover them — this is not the same as those functions being clean. See `HR-E205`.
 

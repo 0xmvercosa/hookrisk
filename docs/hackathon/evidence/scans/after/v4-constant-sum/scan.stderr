@@ -1,26 +1,12 @@
+  scan: src/Counter.sol:Counter run=7714ce1e-c236-4575-9234-d81e622ed346
   project: out=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/v4-constant-sum/repo/out solc=0.8.26 (forge-config) artifact=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/v4-constant-sum/repo/out/Counter.sol/Counter.json
+  harness: Counter.sol:Counter flags=derived-from-runtime maxFee=0bips ctorArgs=1 word(s) run=a44c819c-1a35-4b57-8f13-752ad95f91a1
   hookrisk: slither src/Counter.sol:Counter
   hookrisk: 10 finding(s) in other files, not attributed to this target: src/forks/BaseHook.sol (10)
-  hookrisk: 2 finding(s)
-  harness: Counter.sol:Counter flags=0x888 maxFee=0bips ctorArgs=1 word(s) (custom curve: I2 -> monotonicity) run=314009b9-8aea-448f-b246-29e34ab760a6
-  harness: 3 invariant(s), 0 failed (flags=0x888, seeded=hooked-failed)
-
-MEDIUM risk  9/33  (undetermined: up to 26/33)
-
-  findings    2 info
-  ✓ hookrisk   ok
-  ✓ harness    ok
-  invariants  I1 passed, I2 passed, I3 passed
-  ! 5 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
-  ! trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured
-  ! trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured
-  ! trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured
-  ! trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured
-
-  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/v4-constant-sum/HOOK_RISK.md
-  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/v4-constant-sum/hook-risk.json
-  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/v4-constant-sum/hookrisk.sarif
-
-  gate failed
-    - tier is undetermined between Medium Risk and High Risk; the upper bound exceeds the configured maximum of medium
-
+  hookrisk: 3 finding(s); analysed 1 hook contract(s); permissions resolved from the profile
+  harness: 3 invariant(s), 0 failed, 3 inconclusive (flags=0x888 derived, seeded=hooked-failed) observed 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s)
+  hookrisk: ok
+  harness: ok
+  reconcile: beforeAddLiquidity classified intentionally disabled by hookrisk and observed rejecting the harness's seed (Error("No v4 Liquidity allowed")); merged into finding a43cc8e88654b94b at confidence high
+  reconcile: I3 not-applicable — both layers agree PoolManager liquidity is disabled by design
+  scan: finished in 4970ms, exit 0

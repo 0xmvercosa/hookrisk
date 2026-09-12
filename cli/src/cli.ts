@@ -37,12 +37,13 @@ import {
   type InvariantResult,
 } from './manifest.js';
 import {
-  parseDeclaredPermissions,
+  FLAG_BITS,
   permissionsFrom,
   resolveProject,
   runHarness,
   type HarnessOutcome,
 } from './harness.js';
+import { reconcileLayers } from './reconcile.js';
 import { toSarif } from './sarif.js';
 import { deriveScoringInput } from './scoring/derive.js';
 import { loadRubric } from './scoring/rubric.js';
@@ -287,10 +288,13 @@ async function commandScan(argv: string[]): Promise<number> {
   );
 
   // The dynamic layer executes the hook rather than reading it, so it needs the
-  // permission set to place the hook at a flag-bearing address. Null when this
-  // file inherits getHookPermissions(); the harness then derives the flags from
-  // the compiled runtime code and reports what it found.
-  const permissions = parseDeclaredPermissions(readFileSync(resolve(args.projectRoot, sourceFile), 'utf8'));
+  // permission set to place the hook at a flag-bearing address. It derives that
+  // set itself, from the compiled runtime code: the static engine also resolves
+  // getHookPermissions(), but it runs concurrently with the harness, and a
+  // source-level reading is the weaker claim anyway — the runtime derivation is
+  // what the PoolManager would actually obey. Both are recorded in the manifest
+  // and a disagreement between them is reported below.
+  const permissions: Record<string, boolean> | null = null;
 
   // --- run the engines and the harness together ---
   //
@@ -388,6 +392,7 @@ async function commandScan(argv: string[]): Promise<number> {
     engineResults,
     declared: config.declared,
     dimensionIds: rubric.dimensions.map((d) => d.id),
+    contractName,
   });
   const scored = score(scoringInput, rubric);
 
@@ -397,6 +402,10 @@ async function commandScan(argv: string[]): Promise<number> {
   let harness: HarnessSummary = { version: 'n/a', status: 'skipped', reason: '--skip-dynamic', durationMs: 0 };
   const permissionsSection: Record<string, unknown> = {};
   if (permissions) permissionsSection.fromSource = permissions;
+  // The static engine's resolved getHookPermissions(), inheritance followed,
+  // from its hook-profile for the target.
+  const staticResult = engineResults.find((r) => r.engine === 'hookrisk' && r.status === 'ok');
+  if (staticResult?.permissions) permissionsSection.fromEngine = staticResult.permissions;
 
   if (outcome) {
     invariants = outcome.invariants;
@@ -419,6 +428,22 @@ async function commandScan(argv: string[]): Promise<number> {
       // What the harness actually deployed under. Recorded even when it agrees
       // with the source declaration: this is the set the PoolManager obeyed.
       permissionsSection.fromRuntime = permissionsFrom(outcome.run.flags);
+      // Static and runtime are two independent readings of the same function.
+      // They should agree; when they do not, one of the two analyses is looking
+      // at the wrong contract, and a reader must be told rather than left to
+      // pick the row they prefer.
+      if (staticResult?.permissions) {
+        const runtime = permissionsSection.fromRuntime as Record<string, boolean>;
+        const differing = Object.keys(FLAG_BITS).filter(
+          (field) => Boolean(staticResult.permissions![field]) !== Boolean(runtime[field]),
+        );
+        if (differing.length > 0) {
+          permissionsSection.disagreement = differing;
+          log.event('warn', 'reconcile',
+            `permissions: static analysis and the deployed runtime disagree on ${differing.join(', ')}`,
+            { differing });
+        }
+      }
       permissionsSection.harnessRun = {
         flags: outcome.run.flags,
         permissionsDerived: outcome.run.permissionsDerived,
@@ -429,6 +454,19 @@ async function commandScan(argv: string[]): Promise<number> {
       };
     }
   }
+
+  // --- reconcile the two layers ---
+  // A static "disabled by design" classification and a harness seed that
+  // reverted are the same fact observed twice; merged, they become one finding
+  // confirmed across layers, and an exit-liveness invariant that could never
+  // have been exercised is reported not-applicable instead of vacuously passed.
+  const reconciled = reconcileLayers({
+    findings,
+    invariants,
+    ...(outcome?.run ? { runRecord: outcome.run } : {}),
+    ...(outcome?.observations ? { observations: outcome.observations } : {}),
+  });
+  for (const note of reconciled.notes) log.event('info', 'reconcile', note);
 
   // --- manifest ---
   const manifest = buildManifest({
@@ -443,12 +481,15 @@ async function commandScan(argv: string[]): Promise<number> {
       projectConfigSource: project.configSource,
     },
     ...(Object.keys(permissionsSection).length > 0 ? { permissions: permissionsSection } : {}),
-    findings,
-    invariants,
+    findings: reconciled.findings,
+    invariants: reconciled.invariants,
     score: scored,
     engineResults,
     engineMeta,
     harness,
+    ...(outcome?.observations
+      ? { observations: { ...outcome.observations, ...(outcome.observedSequences !== undefined ? { sequences: outcome.observedSequences } : {}) } }
+      : {}),
     corroboratedFindings: stats.corroborated,
     uncoveredFunctions,
     staticAnalysisSkipped: args.skipStatic,
@@ -474,7 +515,7 @@ async function commandScan(argv: string[]): Promise<number> {
 
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(reportPath, `${renderMarkdown(manifest)}\n`);
-  writeFileSync(sarifPath, `${JSON.stringify(toSarif(findings, VERSION), null, 2)}\n`);
+  writeFileSync(sarifPath, `${JSON.stringify(toSarif(reconciled.findings, VERSION), null, 2)}\n`);
 
   if (args.json) {
     process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);

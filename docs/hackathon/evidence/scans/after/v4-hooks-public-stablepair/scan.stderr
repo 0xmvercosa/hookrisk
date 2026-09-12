@@ -1,32 +1,10 @@
+  scan: src/stable/StablePairHook.sol:StablePairHook run=2e518a03-c9e0-4c11-8748-50cb3a74928c
   project: out=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/v4-hooks-public-stablepair/repo/foundry-out solc=0.8.26 (artifact-metadata) artifact=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/v4-hooks-public-stablepair/repo/foundry-out/StablePairHook.sol/StablePairHook.json
+  harness: StablePairHook.sol:StablePairHook flags=derived-from-runtime maxFee=100bips ctorArgs=1 word(s) run=e949ce83-c09e-431d-815b-d5ba7432b374
   hookrisk: slither src/stable/StablePairHook.sol:StablePairHook
   hookrisk: 26 function(s) could not be lifted to IR and were not analysed (HR-E205)
-  hookrisk: 15 finding(s) in other files, not attributed to this target: src/aggregator-hooks/BaseAggregatorHook.sol (1), src/aggregator-hooks/implementations/FluidDexLite/FluidDexLiteAggregator.sol (1), src/aggregator-hooks/implementations/FluidDexT1/FluidDexT1Aggregator.sol (1), src/aggregator-hooks/implementations/LitePSM/LitePSMAggregator.sol (1), src/aggregator-hooks/implementations/PancakeSwapV3/PancakeSwapV3Aggregator.sol (1), src/aggregator-hooks/implementations/Slipstream/SlipstreamAggregator.sol (1), src/aggregator-hooks/implementations/StableSwap/StableSwapAggregator.sol (1), src/aggregator-hooks/implementations/StableSwapNG/StableSwapNGAggregator.sol (1), src/aggregator-hooks/implementations/TempoExchange/TempoExchangeAggregator.sol (1), src/aggregator-hooks/implementations/UniswapV2/UniswapV2Aggregator.sol (1), src/aggregator-hooks/implementations/UniswapX/UniswapXAggregator.sol (1), src/base/BaseDynamicFeeHook.sol (1), src/base/BaseTokenWrapperHook.sol (1), src/WETHHook.sol (1), src/WstETHRoutingHook.sol (1)
-  hookrisk: 1 finding(s)
-  harness: StablePairHook.sol:StablePairHook flags=derived-from-runtime maxFee=100bips ctorArgs=1 word(s) run=ca5b2025-c7ed-43ec-92b5-9902e7cb41e6
+  hookrisk: 28 finding(s) in other files, not attributed to this target: src/aggregator-hooks/implementations/FluidDexLite/FluidDexLiteAggregator.sol (2), src/aggregator-hooks/implementations/FluidDexT1/FluidDexT1Aggregator.sol (2), src/aggregator-hooks/implementations/LitePSM/LitePSMAggregator.sol (2), src/aggregator-hooks/implementations/PancakeSwapV3/PancakeSwapV3Aggregator.sol (2), src/aggregator-hooks/implementations/Slipstream/SlipstreamAggregator.sol (2), src/aggregator-hooks/implementations/StableSwap/StableSwapAggregator.sol (2), src/aggregator-hooks/implementations/StableSwapNG/StableSwapNGAggregator.sol (2), src/aggregator-hooks/implementations/TempoExchange/TempoExchangeAggregator.sol (2), src/aggregator-hooks/implementations/UniswapV2/UniswapV2Aggregator.sol (2), src/aggregator-hooks/implementations/UniswapX/UniswapXAggregator.sol (2), src/WETHHook.sol (2), src/WstETHRoutingHook.sol (2), src/aggregator-hooks/BaseAggregatorHook.sol (1), src/base/BaseDynamicFeeHook.sol (1), src/base/BaseTokenWrapperHook.sol (1), src/permissioned-pools/PermissionedHooks.sol (1)
+  hookrisk: 2 finding(s); analysed 14 hook contract(s); permissions resolved from the profile
+  hookrisk: ok
   harness: failed — harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).
-
-LOW risk  4/33  (undetermined: up to 24/33)
-
-  findings    1 high
-  ✓ hookrisk   ok
-  ✗ harness    failed  harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).
-  invariants  I1 inconclusive, I2 inconclusive, I3 inconclusive
-
-  ⚠ 26 function(s) were not analysed (HR-E205) — a clean result does not cover them
-  ! 6 dimension(s) unmeasured: the tier is between Low Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
-  ! trigger 'custom-math' could not be evaluated: dimension 'customMath' is unmeasured
-  ! trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured
-  ! trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured
-  ! trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured
-  ! trigger 'price-impact' could not be evaluated: dimension 'priceImpactingBehavior' is unmeasured
-  ! trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured
-
-  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/v4-hooks-public-stablepair/HOOK_RISK.md
-  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/v4-hooks-public-stablepair/hook-risk.json
-  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/v4-hooks-public-stablepair/hookrisk.sarif
-
-  gate failed
-    - tier is undetermined between Low Risk and High Risk; the upper bound exceeds the configured maximum of medium
-    - 1 finding(s) at or above high: StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working `afterIni...
-
+  scan: finished in 11813ms, exit 2

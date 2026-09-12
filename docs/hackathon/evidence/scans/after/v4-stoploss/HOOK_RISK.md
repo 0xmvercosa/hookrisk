@@ -4,8 +4,9 @@
 
 > **Tier is undetermined.** 3/33 from what could be measured, up to 28/33 if every unmeasured dimension were at its maximum — between low and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
-❌ **Gate failed.**
-- tier is undetermined between Low Risk and High Risk; the upper bound exceeds the configured maximum of medium
+✅ **Gate passed.**
+
+> ℹ️ tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (7 dimension(s) unmeasured: complexity, customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
 
 ## What was assessed
 
@@ -66,7 +67,7 @@ Reported by: `hookrisk/hookrisk-unsupported-abi`
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
 | hookrisk Slither detectors | ok | 1 |  |
-| Differential harness (Foundry) | failed | 0 | harness setUp failed: TwinPools: getHookPermissions() reverted on the supplied runtime code (not a BaseHook-shaped hook, or the wrong bytecode): 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
+| Differential harness (Foundry) | failed (HR-E304) | 0 | harness setUp failed: TwinPools: getHookPermissions() reverted on the supplied runtime code (not a BaseHook-shaped hook, or the wrong bytecode): 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
 
 ## Warnings
 

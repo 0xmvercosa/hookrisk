@@ -235,7 +235,7 @@
       "version": "0.11.6",
       "status": "ok",
       "findingCount": 1,
-      "durationMs": 3053
+      "durationMs": 3177
     },
     {
       "engine": "harness",
@@ -275,11 +275,12 @@
     }
   ],
   "gate": {
-    "passed": false,
+    "passed": true,
     "maxTier": "medium",
     "maxSeverity": "high",
-    "failures": [
-      "tier is undetermined between Low Risk and High Risk; the upper bound exceeds the configured maximum of medium"
+    "failures": [],
+    "notes": [
+      "tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (7 dimension(s) unmeasured: complexity, customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
     ]
   }
 }

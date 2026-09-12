@@ -1,29 +1,11 @@
+  scan: src/mocks/general/AntiSandwichMock.sol:AntiSandwichMock run=ed2e90bc-f4d2-4ba6-965e-3584eabecad2
   project: out=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/oz-antisandwich-mock/repo/out solc=0.8.26 (forge-config) artifact=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/oz-antisandwich-mock/repo/out/AntiSandwichMock.sol/AntiSandwichMock.json
+  harness: AntiSandwichMock.sol:AntiSandwichMock flags=derived-from-runtime maxFee=0bips ctorArgs=1 word(s) run=7fd18d60-2383-4230-a008-dcee8bdab8e3
   hookrisk: slither src/mocks/general/AntiSandwichMock.sol:AntiSandwichMock
+  harness: 3 invariant(s), 0 failed (flags=0xc4 derived, seeded=both) observed 1285 sequence(s), 13900 swap(s) landed, 13900 compared, 13900 price check(s), 6690 position(s) opened, 6690 closed, 6710 donation(s), 0 hooked-only swap revert(s), 0 exit failure(s)
   hookrisk: 3 function(s) could not be lifted to IR and were not analysed (HR-E205)
-  hookrisk: 17 finding(s) in other files, not attributed to this target: src/mocks/base/BaseHookMock.sol (10), src/base/BaseCustomAccounting.sol (2), src/mocks/base/BaseAsyncSwapMock.sol (1), src/mocks/base/BaseCustomCurveMock.sol (1), src/mocks/fee/BaseDynamicAfterFeeMock.sol (1), src/mocks/fee/BaseHookFeeMock.sol (1), src/mocks/general/LiquidityPenaltyHookMock.sol (1)
-  hookrisk: 1 finding(s)
-  harness: AntiSandwichMock.sol:AntiSandwichMock flags=derived-from-runtime maxFee=0bips ctorArgs=1 word(s) run=8321ebdf-6298-415f-bb9c-6f1485849f40
-  harness: 3 invariant(s), 0 failed (flags=0xc4 derived, seeded=both)
-
-MEDIUM risk  9/33  (undetermined: up to 26/33)
-
-  findings    1 info
-  ✓ hookrisk   ok
-  ✓ harness    ok
-  invariants  I1 passed, I2 passed, I3 passed
-
-  ⚠ 3 function(s) were not analysed (HR-E205) — a clean result does not cover them
-  ! 5 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
-  ! trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured
-  ! trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured
-  ! trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured
-  ! trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured
-
-  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/oz-antisandwich-mock/HOOK_RISK.md
-  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/oz-antisandwich-mock/hook-risk.json
-  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/oz-antisandwich-mock/hookrisk.sarif
-
-  gate failed
-    - tier is undetermined between Medium Risk and High Risk; the upper bound exceeds the configured maximum of medium
-
+  hookrisk: 32 finding(s) in other files, not attributed to this target: src/mocks/base/BaseHookMock.sol (12), src/base/BaseCustomAccounting.sol (2), src/mocks/base/BaseAsyncSwapMock.sol (2), src/mocks/base/BaseCustomCurveMock.sol (2), src/mocks/fee/BaseDynamicAfterFeeMock.sol (2), src/mocks/fee/BaseHookFeeMock.sol (2), src/mocks/general/LiquidityPenaltyHookMock.sol (2), src/mocks/base/BaseCustomAccountingFeeMock.sol (1), src/mocks/fee/BaseDynamicFeeMock.sol (1), src/mocks/fee/BaseOverrideFeeMock.sol (1), src/mocks/general/LimitOrderHookMock.sol (1), src/mocks/general/ReHypothecationERC4626Mock.sol (1), src/mocks/general/ReHypothecationNativeMock.sol (1), src/mocks/oracles/panoptic/BaseOracleHookMock.sol (1), src/mocks/oracles/panoptic/OracleHookWithV3AdaptersMock.sol (1)
+  hookrisk: 2 finding(s); analysed 16 hook contract(s); permissions resolved from the profile
+  hookrisk: ok
+  harness: ok
+  scan: finished in 7830ms, exit 0

@@ -1,11 +1,12 @@
 # Hook Risk Report
 
-**LOW risk** — 3/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
+**LOW risk** — 5/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
 
-> **Tier is undetermined.** 3/33 from what could be measured, up to 28/33 if every unmeasured dimension were at its maximum — between low and high. Unmeasured dimensions are excluded from the total, never counted as zero.
+> **Tier is undetermined.** 5/33 from what could be measured, up to 25/33 if every unmeasured dimension were at its maximum — between low and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
-❌ **Gate failed.**
-- tier is undetermined between Low Risk and High Risk; the upper bound exceeds the configured maximum of medium
+✅ **Gate passed.**
+
+> ℹ️ tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (6 dimension(s) unmeasured: customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
 
 ## What was assessed
 
@@ -15,11 +16,26 @@
 | Source | `src/Counter.sol` |
 | Mode | source |
 
+### Hook profile
+
+| Metric | Value |
+| --- | --- |
+| Callbacks implemented (count) | 4 |
+| Callbacks declared | 4 |
+| State writes in callbacks | 4 |
+| External calls in the swap path | 0 |
+| Internal functions reachable from callbacks | 4 |
+| Returns a delta | false |
+| Owner-only surface | false |
+| Permissions declared | `beforeAddLiquidity`, `beforeRemoveLiquidity`, `beforeSwap`, `afterSwap` |
+
+Complexity is derived from these metrics; the rule that fired is in the score table’s evidence.
+
 ## Score
 
 | Dimension | Score | Source | Bracket |
 | --- | --- | --- | --- |
-| Complexity | — | unmeasured | _unmeasured_ ᵃ |
+| Complexity | 2/5 | measured | Callbacks write hook state, or 3+ callbacks ᵃ |
 | Custom math | — | unmeasured | _unmeasured_ ᵃ |
 | External dependencies | — | unmeasured | _unmeasured_ ᵃ |
 | External liquidity exposure | — | unmeasured | _unmeasured_ ᵃ |
@@ -57,12 +73,14 @@ None.
 
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
-| hookrisk Slither detectors | ok | 0 |  |
+| hookrisk Slither detectors | ok | 1 |  |
 | Differential harness (Foundry) | ok | 0 |  |
+
+The harness executed 13440 swap(s) (13440 compared against the reference pool, 0 skipped), opened 6870 and closed 6870 position(s), made 6710 donation(s) and ran 13440 price check(s) over 1285 sequence(s). An invariant with no relevant observations is reported inconclusive, not passed.
 
 ## Warnings
 
-- 7 dimension(s) unmeasured: the tier is between Low Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
+- 6 dimension(s) unmeasured: the tier is between Low Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
 - trigger 'custom-math' could not be evaluated: dimension 'customMath' is unmeasured
 - trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured
 - trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured

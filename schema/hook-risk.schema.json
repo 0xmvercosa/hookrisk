@@ -200,6 +200,13 @@
               }
             }
           }
+        },
+        "disagreement": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Permission fields on which the static engine's resolved getHookPermissions() and the harness's runtime derivation disagree. Empty or absent when they agree."
         }
       }
     },
@@ -618,16 +625,46 @@
           "description": "What the harness actually did, summed over every completed fuzz sequence (harness/out/hookrisk-obs-<RUN_ID>.jsonl). `hookedSwapReverted` is the number of sequences in which the hooked pool's swap reverted while the reference pool's did not. An invariant that passed with zero relevant observations is reported `inconclusive`, and these counts are how a reader checks that.",
           "additionalProperties": false,
           "properties": {
-            "swapsExecuted": { "type": "integer", "minimum": 0 },
-            "swapsCompared": { "type": "integer", "minimum": 0 },
-            "swapsSkipped": { "type": "integer", "minimum": 0 },
-            "hookedSwapReverted": { "type": "integer", "minimum": 0 },
-            "positionsOpened": { "type": "integer", "minimum": 0 },
-            "positionsClosed": { "type": "integer", "minimum": 0 },
-            "donations": { "type": "integer", "minimum": 0 },
-            "priceChecks": { "type": "integer", "minimum": 0 },
-            "monotonicityViolations": { "type": "integer", "minimum": 0 },
-            "exitFailures": { "type": "integer", "minimum": 0 },
+            "swapsExecuted": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "swapsCompared": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "swapsSkipped": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "hookedSwapReverted": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "positionsOpened": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "positionsClosed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "donations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "priceChecks": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "monotonicityViolations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "exitFailures": {
+              "type": "integer",
+              "minimum": 0
+            },
             "sequences": {
               "type": "integer",
               "minimum": 0,

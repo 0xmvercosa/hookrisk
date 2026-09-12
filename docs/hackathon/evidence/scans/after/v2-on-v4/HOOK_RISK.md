@@ -1,12 +1,13 @@
 # Hook Risk Report
 
-**MEDIUM risk** — 10/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
+**MEDIUM risk** — 13/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
 
-> **Tier is undetermined.** 10/33 from what could be measured, up to 22/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
+> **Tier is undetermined.** 13/33 from what could be measured, up to 25/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
 ❌ **Gate failed.**
-- tier is undetermined between Medium Risk and High Risk; the upper bound exceeds the configured maximum of medium
 - 1 finding(s) at or above high: V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never c...
+
+> ℹ️ tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
 
 ## What was assessed
 
@@ -16,11 +17,26 @@
 | Source | `src/V2PairHook.sol` |
 | Mode | source |
 
+### Hook profile
+
+| Metric | Value |
+| --- | --- |
+| Callbacks implemented (count) | 2 |
+| Callbacks declared | 4 |
+| State writes in callbacks | 2 |
+| External calls in the swap path | 4 |
+| Internal functions reachable from callbacks | 4 |
+| Returns a delta | true |
+| Owner-only surface | false |
+| Permissions declared | `beforeInitialize`, `beforeAddLiquidity`, `beforeSwap`, `afterSwap`, `beforeSwapReturnDelta`, `afterSwapReturnDelta` |
+
+Complexity is derived from these metrics; the rule that fired is in the score table’s evidence.
+
 ## Score
 
 | Dimension | Score | Source | Bracket |
 | --- | --- | --- | --- |
-| Complexity | 1/5 | measured | 1-2 callbacks, no branching on hook state ᵃ |
+| Complexity | 4/5 | measured | Returns a delta and makes an external call in the swap path ᵃ |
 | Custom math | 3/5 | measured | A custom curve or invariant function ᵃ |
 | External dependencies | — | unmeasured | _unmeasured_ ᵃ |
 | External liquidity exposure | — | unmeasured | _unmeasured_ ᵃ |
@@ -59,7 +75,7 @@ These apply regardless of the total score — the framework's own safeguard agai
 
 ### 🟠 V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never c...
 
-`unprotected-hook-callback` · **high** · confidence **high**
+`unprotected-hook-callback` (`afterSwap`) · **high** · confidence **high**
 
 `src/V2PairHook.sol:196`
 
@@ -79,7 +95,7 @@ Reported by: `hookrisk/hookrisk-custom-accounting`
 
 ### ℹ️ V2PairHook (src/V2PairHook.sol#21-284) implements afterAddLiquidity, afterInitialize, afterRemoveLiquidity, beforeAddLiquidity, beforeInitialize, beforeRemov...
 
-`unsupported-hook-abi` · **info** · confidence **high**
+`unsupported-hook-abi` (`partial`) · **info** · confidence **high**
 
 `src/V2PairHook.sol:21`
 
@@ -99,8 +115,8 @@ Reported by: `hookrisk/hookrisk-unsupported-abi`
 
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
-| hookrisk Slither detectors | ok | 3 |  |
-| Differential harness (Foundry) | failed | 0 | harness setUp failed: TwinPools: hook constructor reverted: 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
+| hookrisk Slither detectors | ok | 4 |  |
+| Differential harness (Foundry) | failed (HR-E304) | 0 | harness setUp failed: TwinPools: hook constructor reverted: 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
 
 ## Warnings
 

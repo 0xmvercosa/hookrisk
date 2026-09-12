@@ -1,11 +1,12 @@
 # Hook Risk Report
 
-**MEDIUM risk** — 9/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
+**MEDIUM risk** — 13/33 against the [Uniswap Hooks Security Framework](https://github.com/uniswapfoundation/security-framework).
 
-> **Tier is undetermined.** 9/33 from what could be measured, up to 26/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
+> **Tier is undetermined.** 13/33 from what could be measured, up to 25/33 if every unmeasured dimension were at its maximum — between medium and high. Unmeasured dimensions are excluded from the total, never counted as zero.
 
-❌ **Gate failed.**
-- tier is undetermined between Medium Risk and High Risk; the upper bound exceeds the configured maximum of medium
+✅ **Gate passed.**
+
+> ℹ️ tier is undetermined between Medium Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (4 dimension(s) unmeasured: externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true.
 
 ## What was assessed
 
@@ -15,11 +16,26 @@
 | Source | `src/OrbitalHook.sol` |
 | Mode | source |
 
+### Hook profile
+
+| Metric | Value |
+| --- | --- |
+| Callbacks implemented (count) | 1 |
+| Callbacks declared | 3 |
+| State writes in callbacks | 3 |
+| External calls in the swap path | 3 |
+| Internal functions reachable from callbacks | 8 |
+| Returns a delta | true |
+| Owner-only surface | false |
+| Permissions declared | `beforeAddLiquidity`, `beforeRemoveLiquidity`, `beforeSwap`, `beforeSwapReturnDelta` |
+
+Complexity is derived from these metrics; the rule that fired is in the score table’s evidence.
+
 ## Score
 
 | Dimension | Score | Source | Bracket |
 | --- | --- | --- | --- |
-| Complexity | — | unmeasured | _unmeasured_ ᵃ |
+| Complexity | 4/5 | measured | Returns a delta and makes an external call in the swap path ᵃ |
 | Custom math | 3/5 | measured | A custom curve or invariant function ᵃ |
 | External dependencies | — | unmeasured | _unmeasured_ ᵃ |
 | External liquidity exposure | — | unmeasured | _unmeasured_ ᵃ |
@@ -68,17 +84,17 @@ Reported by: `hookrisk/hookrisk-custom-accounting`
 
 ### ℹ️ OrbitalHook._beforeAddLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#325-335) overrides `beforeAddLiquidity` with `revert "Use c...
 
-`callback-intentionally-disabled` · **info** · confidence **high**
+`callback-intentionally-disabled` (`beforeAddLiquidity`) · **info** · confidence **high** · **corroborated by multiple engines**
 
 `src/OrbitalHook.sol:325`
 
 OrbitalHook._beforeAddLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#325-335) overrides `beforeAddLiquidity` with `revert "Use custom addLiquidity"`, so PoolManager-routed liquidity addition is disabled by design. The harness will observe reverts there; this is not the missing implementation HS-02 reports.
 
-Reported by: `hookrisk/hookrisk-disabled-callback`
+Reported by: `hookrisk/hookrisk-disabled-callback`, `harness/seed-reverted`
 
 ### ℹ️ OrbitalHook._beforeRemoveLiquidity(address,PoolKey,ModifyLiquidityParams,bytes) (src/OrbitalHook.sol#338-345) overrides `beforeRemoveLiquidity` with `revert ...
 
-`callback-intentionally-disabled` · **info** · confidence **high**
+`callback-intentionally-disabled` (`beforeRemoveLiquidity`) · **info** · confidence **high**
 
 `src/OrbitalHook.sol:338`
 
@@ -90,20 +106,22 @@ Reported by: `hookrisk/hookrisk-disabled-callback`
 
 | | Invariant | Result | Detail |
 | --- | --- | --- | --- |
-| ⚠️ | I1 Conservation and solvency | skipped | OrbitalHook's constructor takes 4 argument(s) (address _poolManager, address _token0, address _token1, address _token2) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305. |
-| ⚠️ | I2 No undeclared extraction | skipped | OrbitalHook's constructor takes 4 argument(s) (address _poolManager, address _token0, address _token1, address _token2) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305. |
-| ⚠️ | I3 Exit liveness | skipped | OrbitalHook's constructor takes 4 argument(s) (address _poolManager, address _token0, address _token1, address _token2) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305. |
+| ⚠️ | I1 Conservation and solvency | inconclusive | passed vacuously: 0 swaps landed and 0 positions opened across 1285 sequences; the hook rejected PoolManager liquidity (Error("Use custom addLiquidity")) so the pool never traded; a swap that worked without the hook reverted with it in 1285 sequence(s). Observed: 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s). |
+| ⚠️ | I2 Price monotonicity (custom curve) | inconclusive | passed vacuously: 0 price checks across 1285 sequences; the hook rejected PoolManager liquidity (Error("Use custom addLiquidity")) so the pool never traded; a swap that worked without the hook reverted with it in 1285 sequence(s). Observed: 1285 sequence(s), 0 swap(s) landed, 0 compared, 0 price check(s), 0 position(s) opened, 0 closed, 0 donation(s), 1285 hooked-only swap revert(s), 0 exit failure(s). Output comparison against an unhooked pool does not apply to a custom-curve hook; price monotonicity was asserted instead. |
+| ➖ | I3 Exit liveness | not-applicable | PoolManager liquidity is disabled by design: hookrisk classifies beforeAddLiquidity, beforeRemoveLiquidity as intentionally disabled and the harness's seed position was rejected with Error("Use custom addLiquidity"). No position can exist on the hooked pool, so exit liveness has nothing to assert; liquidity held through the hook's own path is not exercised. The harness opened 0 position(s). |
 
 ## Analysis coverage
 
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
-| hookrisk Slither detectors | ok | 3 |  |
-| Differential harness (Foundry) | skipped | 0 | OrbitalHook's constructor takes 4 argument(s) (address _poolManager, address _token0, address _token1, address _token2) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305. |
+| hookrisk Slither detectors | ok | 4 |  |
+| Differential harness (Foundry) | ok | 0 |  |
+
+The harness executed 0 swap(s) (0 compared against the reference pool, 0 skipped), opened 0 and closed 0 position(s), made 0 donation(s) and ran 0 price check(s) over 1285 sequence(s). An invariant with no relevant observations is reported inconclusive, not passed.
 
 ## Warnings
 
-- 5 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
+- 4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
 - trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured
 - trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured
 - trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured

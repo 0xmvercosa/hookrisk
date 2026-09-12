@@ -210,8 +210,9 @@
       "version": "0.11.6",
       "status": "failed",
       "reason": "HR-E202 Foundry test path shadows the source path, so nothing is analysed: Error (7920): Identifier not found or not unique. --> src/RefHook.sol:144:59:",
+      "errorCode": "HR-E202",
       "findingCount": 0,
-      "durationMs": 718
+      "durationMs": 733
     },
     {
       "engine": "harness",
@@ -251,11 +252,12 @@
     }
   ],
   "gate": {
-    "passed": false,
+    "passed": true,
     "maxTier": "medium",
     "maxSeverity": "high",
-    "failures": [
-      "tier is undetermined between Low Risk and High Risk; the upper bound exceeds the configured maximum of medium"
+    "failures": [],
+    "notes": [
+      "tier is undetermined between Low Risk and High Risk; the measured lower bound is within the configured maximum of medium and failOnInconclusive is off, so the range does not fail the gate (7 dimension(s) unmeasured: complexity, customMath, externalDependencies, externalLiquidityExposure, upgradeability, autonomousParameterUpdates, priceImpactingBehavior). Declare the unmeasured dimensions in hookrisk.toml to close it, or set failOnInconclusive = true."
     ]
   }
 }
