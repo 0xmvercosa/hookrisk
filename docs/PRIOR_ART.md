@@ -54,6 +54,50 @@ Their analysis works on the Yul CFG and ours on solc's AST, so agreement is clos
 to independent confirmation — the strongest false-positive filter available
 without a human.
 
+Exercised end to end, with output, in
+[docs/hackathon/evidence/blocksec-corroboration.md](hackathon/evidence/blocksec-corroboration.md):
+both engines independently flag the same two unguarded callbacks in
+`corpus/src/bad/UnvalidatedCallback.sol`, at the same two lines.
+
+### What it takes to run the published image
+
+Three things stand between `docker pull` and a result. hookrisk handles all
+three; they are written down here because each one is a property of the upstream
+image rather than of this adapter, and each will outlive our workaround.
+
+**It is `linux/amd64` only.** A bare `docker pull` on Apple Silicon fails with
+`no matching manifest for linux/arm64/v8`. hookrisk passes
+`--platform linux/amd64` on every invocation — a no-op on an amd64 host,
+emulation elsewhere — and puts the same flag in the pull command it suggests
+when the image is missing. `HOOKRISK_BLOCKSEC_PLATFORM` overrides it; empty omits
+the flag for a runtime that does not understand it.
+
+**Its entrypoint cannot start under Docker Desktop.** `/entrypoint.sh` derives a
+uid/gid from the mounted `/project` and runs `groupadd`/`useradd` with them. The
+mount is owned by uid 0, so `groupadd -g 0` fails, and the trailing `su scanner`
+never reaches the analyser. hookrisk bypasses it with `--entrypoint python` and
+assembles the same argument vector the entrypoint would have. Nothing is lost:
+the user-creation step existed to keep output files owned by the host user, and
+HookScan writes none.
+
+**It ships solc 0.8.14 – 0.8.24, and v4-core pins 0.8.26.** As published, every
+current hook fails to compile inside it. When the project's version is absent
+hookrisk downloads that exact linux-amd64 static build from
+`binaries.soliditylang.org` (the filename comes from the official `list.json`;
+the `+commit.…` suffix is not derivable), caches it under
+`~/.cache/hookrisk/solc/<version>/` — `HOOKRISK_CACHE_DIR` moves the root — and
+mounts it read-only at `/solc/v<version>/solc`. The download happens on the
+host: the analysis container still runs `--network none`.
+
+One project shape genuinely does not work: a `lib/` symlinked outside the
+project root, as `corpus/lib` is. Only the project root is mounted, and solc then
+rejects every import as outside its allowed directories. Rebinding the realpath
+does not help — the runtime resolves a bind-mount destination *through* the
+symlink — and HookScan builds its own solc command line, so `--allow-paths`
+is not ours to widen. hookrisk detects this on the host and fails the engine
+loudly, because a container that compiles nothing returns an empty result set
+that is indistinguishable from a clean hook.
+
 ### Licensing
 
 HookScan is AGPL-3.0. hookrisk invokes it as a separate process, never links it,
