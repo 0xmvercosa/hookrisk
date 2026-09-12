@@ -125,6 +125,20 @@ describe('fromDocument', () => {
   test('rejects an invalid gate tier', () => {
     assert.throws(() => fromDocument({ gate: { maxTier: 'extreme' } }), HookriskError);
   });
+
+  test('parses failOnInconclusive and leaves it undefined when absent', () => {
+    // Undefined rather than false: the manifest echoes what the policy said,
+    // and "not stated" is not the same statement as "false".
+    assert.equal(fromDocument({ gate: { maxTier: 'medium' } }).gate.failOnInconclusive, undefined);
+    assert.equal(fromDocument({ gate: { failOnInconclusive: true } }).gate.failOnInconclusive, true);
+    assert.equal(fromDocument({ gate: { failOnInconclusive: false } }).gate.failOnInconclusive, false);
+  });
+
+  test('rejects a non-boolean failOnInconclusive rather than coercing it', () => {
+    // Boolean("false") is true; a policy read as its opposite must not load.
+    assert.throws(() => fromDocument({ gate: { failOnInconclusive: 'false' } }), HookriskError);
+    assert.throws(() => fromDocument({ gate: { failOnInconclusive: 1 } }), HookriskError);
+  });
 });
 
 describe('[harness]', () => {
@@ -230,5 +244,17 @@ describe('configTemplate', () => {
     const config = fromDocument(parseToml(configTemplate(), 'template'));
     assert.equal(config.engines.blocksec, false, 'pulling a third-party image is the user’s call');
     assert.equal(config.engines.hookrisk, true);
+  });
+
+  test('gates on severity, not on a tier the tool cannot yet determine', () => {
+    // The default template must pass the official v4 template hook. With six
+    // dimensions unmeasured every hook's tier is a range up to High, so a
+    // default maxTier would fail every scan on hookrisk's coverage rather than
+    // on the hook; the tier gate is opt-in and documented in the template.
+    const config = fromDocument(parseToml(configTemplate(), 'template'));
+    assert.equal(config.gate.maxTier, undefined, 'maxTier is commented out, with the reason');
+    assert.equal(config.gate.maxSeverity, 'high');
+    assert.equal(config.gate.failOnInconclusive, false, 'explicit, so the strict posture is one edit away');
+    assert.match(configTemplate(), /# maxTier = "medium"/, 'the commented line shows what to uncomment');
   });
 });

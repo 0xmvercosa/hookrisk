@@ -37,7 +37,8 @@
 
 import type { DeclaredInputs } from '../config.js';
 import type { EngineResult, Finding, RuleClass } from '../types.js';
-import type { DimensionInput, ScoringInput, ValueSource } from './score.js';
+import { type Derivation, type DerivationRule, type Rubric, loadRubric } from './rubric.js';
+import { type DimensionInput, type ScoringInput, type ValueSource, evaluateCondition } from './score.js';
 
 /**
  * Which engine can produce each rule class.
@@ -60,6 +61,7 @@ const CLASS_COVERAGE: Record<RuleClass, string[]> = {
   'rounding-direction': ['hookrisk'],
   'callback-intentionally-disabled': ['hookrisk'],
   'unsupported-hook-abi': ['hookrisk'],
+  'hook-profile': ['hookrisk'],
 };
 
 /**
@@ -77,6 +79,15 @@ const CLASS_COVERAGE: Record<RuleClass, string[]> = {
  * scoring role runs the other way — `unsupported-hook-abi` *revokes* hookrisk's
  * coverage of the target (see `enginesThatLooked`), turning every dimension it
  * would have measured into unmeasured.
+ *
+ * `hook-profile` is the third classification and the only one that feeds a
+ * score: it is the engine's "I looked at this contract" signal and carries the
+ * metrics complexity is derived from (see `deriveFromMetrics`). It is listed
+ * for the same reason as the other two — hookrisk emits it — and like them it
+ * appears in no `raisedBy`. Its absence is how complexity stays unmeasured
+ * when the engine never profiled the target; its presence is never a 0 by
+ * silence, because the value comes from the metrics, not from the finding
+ * having fired.
  */
 const IMPLEMENTED_CLASSES: ReadonlySet<RuleClass> = new Set<RuleClass>([
   'unprotected-hook-callback',
@@ -84,6 +95,7 @@ const IMPLEMENTED_CLASSES: ReadonlySet<RuleClass> = new Set<RuleClass>([
   'custom-accounting',
   'callback-intentionally-disabled',
   'unsupported-hook-abi',
+  'hook-profile',
 ]);
 
 interface DimensionRule {
@@ -137,15 +149,102 @@ const DIMENSION_RULES: Record<string, DimensionRule> = {
     // only ever establish a floor of 1.
     scoreFor: { 'flag-implementation-divergence': 1, 'unprotected-hook-callback': 1 },
     rationale:
-      'The hook implements callbacks with non-trivial structure. This establishes a floor only; hookrisk has no dedicated complexity metric yet.',
+      'The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target.',
     // A floor-only detector cannot measure 0. The rubric's 0 bracket reads
-    // "Pass-through only; no hook state", and nothing hookrisk runs can tell a
+    // "No callbacks implemented", and nothing HS-01/HS-02 run can tell a
     // pass-through hook from a complex one whose callbacks happen to be guarded
     // and correctly declared — which is what every well-written hook looks like.
+    // Only the hook-profile classification, which counts rather than accuses,
+    // can measure it; without one the dimension stays unmeasured.
     unmeasuredWhenSilent:
-      'hookrisk has no complexity metric yet. HS-01 and HS-02 only establish a floor of 1 when they fire, and neither fired; that silence says nothing about how much state the callbacks branch on. Declare complexity in hookrisk.toml to score it.',
+      'the engine emitted no hook-profile for the target, so its metrics could not be read. HS-01 and HS-02 only establish a floor of 1 when they fire, and neither fired; that silence says nothing about how much state the callbacks branch on. Declare complexity in hookrisk.toml to score it.',
   },
 };
+
+// --------------------------------------------------------------------------- //
+// Deriving a value from a classification's metrics
+// --------------------------------------------------------------------------- //
+
+/**
+ * The hook-profile finding for the target, when the engine emitted one.
+ *
+ * Findings reaching the scorer are already restricted to the target file, but
+ * one file can hold several hook contracts (a mock and its base, say), each
+ * with its own profile. The contract name disambiguates through the finding's
+ * discriminator; without one, the first profile wins and the evidence says so.
+ */
+export function hookProfileOf(
+  findings: Finding[],
+  contractName?: string,
+): { profile: Finding; note?: string } | null {
+  const profiles = findings.filter((f) => f.ruleClass === 'hook-profile');
+  if (profiles.length === 0) return null;
+  if (contractName) {
+    const named = profiles.find((f) => f.discriminator === contractName);
+    if (named) return { profile: named };
+  }
+  const note =
+    profiles.length > 1
+      ? `${profiles.length} hook-profile classifications in the target file; used the one anchored at line ${profiles[0]!.location?.line ?? '?'}.`
+      : undefined;
+  return { profile: profiles[0]!, ...(note ? { note } : {}) };
+}
+
+/**
+ * Read the metrics off a profile finding.
+ *
+ * The engine-metadata contract fixes the metric names but not where the
+ * adapter hangs them on `Finding`; `metrics` is the field this branch defines,
+ * and an engine attribution's `detail.metrics` is the pre-existing slot for
+ * engine-specific extras. Either is accepted so the two halves of the contract
+ * can land independently.
+ */
+export function profileMetrics(profile: Finding): Record<string, number | boolean> | null {
+  const isMetrics = (value: unknown): value is Record<string, number | boolean> =>
+    typeof value === 'object' &&
+    value !== null &&
+    Object.values(value as Record<string, unknown>).every(
+      (v) => typeof v === 'number' || typeof v === 'boolean',
+    );
+  if (isMetrics(profile.metrics)) return profile.metrics;
+  for (const attribution of profile.engines) {
+    const candidate = attribution.detail?.metrics;
+    if (isMetrics(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Apply a rubric derivation to a metrics object: highest score first, the
+ * first rule whose condition holds wins. Numeric metrics are the condition
+ * grammar's values, boolean metrics its flags — the same evaluator the
+ * requirement guards use, so the rubric has one condition language, not two.
+ *
+ * Null when no rule matched. A rule table whose lowest rule cannot be met
+ * (a metric the engine did not send, say) leaves the dimension unmeasured with
+ * the metrics in its evidence, rather than defaulting to any score.
+ */
+export function deriveFromMetrics(
+  derivation: Derivation,
+  metrics: Record<string, number | boolean>,
+): { score: number; rule: DerivationRule } | null {
+  const values: Record<string, number> = {};
+  const flags: Record<string, boolean> = {};
+  for (const [name, value] of Object.entries(metrics)) {
+    if (typeof value === 'number') values[name] = value;
+    else flags[name] = value;
+  }
+  const ordered = [...derivation.rules].sort((a, b) => b.score - a.score);
+  for (const rule of ordered) {
+    if (evaluateCondition(rule.when, values, new Set(), flags)) return { score: rule.score, rule };
+  }
+  return null;
+}
+
+const formatMetrics = (metrics: Record<string, number | boolean>): string =>
+  Object.entries(metrics)
+    .map(([name, value]) => `${name}=${value}`)
+    .join(', ');
 
 /** Dimensions hookrisk never measures. Declared or unmeasured, never invented. */
 const NEVER_MEASURED = new Set(['teamMaturity', 'tvlPotential', 'externalLiquidityExposure', 'autonomousParameterUpdates']);
@@ -156,6 +255,10 @@ export interface DeriveOptions {
   declared: DeclaredInputs;
   /** Dimension ids present in the rubric, so we never emit an unknown one. */
   dimensionIds: string[];
+  /** The rubric whose derivation tables apply. Defaults to the bundled one. */
+  rubric?: Rubric;
+  /** Target contract, to pick its hook-profile when the file holds several. */
+  contractName?: string;
 }
 
 /**
@@ -210,7 +313,8 @@ export function enginesThatLooked(
  * is the only defence a document can offer.
  */
 export function deriveScoringInput(options: DeriveOptions): ScoringInput {
-  const { findings, engineResults, declared, dimensionIds } = options;
+  const { findings, engineResults, declared, dimensionIds, contractName } = options;
+  const rubric = options.rubric ?? loadRubric();
 
   const { looked, declined } = enginesThatLooked(engineResults, findings);
 
@@ -247,9 +351,35 @@ export function deriveScoringInput(options: DeriveOptions): ScoringInput {
       continue;
     }
 
-    // Find the strongest evidence present.
     let measured: number | null = null;
     const evidence: string[] = [];
+
+    // A derivation table measures the dimension from a classification's
+    // metrics. It runs first so the floor-only findings below can only raise
+    // the result, never replace a measurement with a floor.
+    const derivation = rubric.dimensions.find((d) => d.id === id)?.derivation;
+    const profiled = derivation ? hookProfileOf(findings, contractName) : null;
+    if (derivation && profiled) {
+      const metrics = profileMetrics(profiled.profile);
+      const hit = metrics ? deriveFromMetrics(derivation, metrics) : null;
+      if (profiled.note) evidence.push(profiled.note);
+      if (!metrics) {
+        evidence.push(`${derivation.source} carried no metrics, so the dimension could not be derived from it.`);
+      } else if (!hit) {
+        evidence.push(
+          `${derivation.source} metrics (${formatMetrics(metrics)}) matched no derivation rule in the rubric.`,
+        );
+      } else {
+        measured = hit.score;
+        evidence.push(`${derivation.source} metrics: ${formatMetrics(metrics)}`);
+        evidence.push(
+          `Scored ${hit.score} by rule \`${hit.rule.when}\`: ${hit.rule.rationale}` +
+            (derivation.interpretation ? ' (hookrisk’s interpretation; the framework publishes no brackets)' : ''),
+        );
+      }
+    }
+
+    // Find the strongest evidence present.
     for (const ruleClass of rule.raisedBy) {
       const hits = byClass.get(ruleClass);
       if (!hits?.length) continue;
@@ -294,8 +424,14 @@ export function deriveScoringInput(options: DeriveOptions): ScoringInput {
               ],
             };
     } else {
+      // A profile that was present but unusable is a more specific reason than
+      // "no profile": say what was wrong with it rather than that it was absent.
       const why =
-        missing.length > 0 ? `Not measured: ${missing.join('; ')}.` : `Not measured: ${rule.unmeasuredWhenSilent}`;
+        missing.length > 0
+          ? `Not measured: ${missing.join('; ')}.`
+          : evidence.length > 0
+            ? `Not measured: ${evidence.join(' ')}`
+            : `Not measured: ${rule.unmeasuredWhenSilent}`;
       dimensions[id] =
         declaredValue !== undefined
           ? {

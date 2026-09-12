@@ -65,7 +65,15 @@ export type RuleClass =
    * classification with a scoring consequence: every hookrisk-derived dimension
    * for this target is unmeasured, because the detectors never looked.
    */
-  | 'unsupported-hook-abi';
+  | 'unsupported-hook-abi'
+  /**
+   * The engine's "I looked at this contract" signal: one INFO classification
+   * per analysed hook contract, carrying the structural metrics (callbacks,
+   * state writes, external calls in the swap path, returns-delta, owner-only
+   * surface) the scoring layer derives Complexity from, plus the resolved
+   * permission set. Never a defect and never a score by itself.
+   */
+  | 'hook-profile';
 
 /**
  * Rule classes that classify rather than accuse.
@@ -79,6 +87,7 @@ export const CLASSIFICATION_CLASSES: ReadonlySet<RuleClass> = new Set<RuleClass>
   'custom-accounting',
   'callback-intentionally-disabled',
   'unsupported-hook-abi',
+  'hook-profile',
 ]);
 
 export const isClassification = (ruleClass: RuleClass): boolean =>
@@ -145,6 +154,16 @@ export interface Finding {
   informsTriggers?: string[];
   /** Where to read more — post-mortems, upstream docs. */
   references?: string[];
+  /**
+   * Structural measurements, present on `hook-profile` findings only: the
+   * engine-metadata contract's `metrics` object, copied verbatim. Numbers and
+   * booleans, never nested — the scoring layer evaluates rubric rules over them.
+   */
+  metrics?: Record<string, number | boolean>;
+  /** Implemented callback names, present on `hook-profile` findings only. */
+  callbacks?: string[];
+  /** The resolved getHookPermissions() set, present on `hook-profile` findings when the contract declares one. */
+  permissions?: Record<string, boolean>;
 }
 
 /** Outcome of one engine run. */

@@ -64,15 +64,72 @@
       "measurable": "measured",
       "description": "Total code complexity including branching logic, number of callbacks, configuration patterns, and multi-step flows.",
       "bracketsAreInterpretation": true,
-      "interpretationNote": "Derived from callback count and branching, the two properties the source names first. See FEEDBACK.md #2.",
+      "interpretationNote": "Derived from callback count, hook state written in callbacks, external calls in the swap path, returns-delta and privileged surface — the properties the source's prose names and the hook-profile classification can count. See FEEDBACK.md #2.",
       "brackets": [
-        { "score": 0, "label": "Pass-through only; no hook state" },
-        { "score": 1, "label": "1-2 callbacks, no branching on hook state" },
-        { "score": 2, "label": "3-4 callbacks, or one operational mode with configuration" },
-        { "score": 3, "label": "5+ callbacks, or multiple operational modes" },
-        { "score": 4, "label": "Multi-step flows spanning callbacks, or per-pool configuration" },
-        { "score": 5, "label": "All of the above plus recursive or reentrant self-interaction" }
-      ]
+        { "score": 0, "label": "No callbacks implemented; pass-through only" },
+        { "score": 1, "label": "1-2 callbacks, no hook state written in them" },
+        { "score": 2, "label": "Callbacks write hook state, or 3+ callbacks" },
+        { "score": 3, "label": "Returns a delta, or makes an external call in the swap path" },
+        { "score": 4, "label": "Returns a delta and makes an external call in the swap path" },
+        { "score": 5, "label": "Returns a delta, external call in the swap path, and an owner-only surface" }
+      ],
+      "$comment_derivation": [
+        "How hookrisk turns the `hook-profile` classification's metrics into a",
+        "score. Evaluated highest score first; the first rule whose `when` holds",
+        "wins. `when` uses the same tiny grammar as requirement conditions",
+        "(`name OP number`, bare boolean names, `&&` / `||`, left to right, no",
+        "parentheses), over the metric names the engine-metadata contract defines.",
+        "",
+        "This is an interpretation: the framework describes complexity in prose",
+        "and publishes no brackets. The rationale per rule says which sentence of",
+        "that prose the rule reads. HS-01 / HS-02 findings still establish a floor",
+        "of 1 independently of this table (derive.ts)."
+      ],
+      "derivation": {
+        "interpretation": true,
+        "source": "hook-profile",
+        "metrics": [
+          "callbacksImplemented",
+          "callbacksDeclared",
+          "stateWritesInCallbacks",
+          "externalCallsInSwapPath",
+          "internalFunctionsReachableFromCallbacks",
+          "usesReturnsDelta",
+          "hasOwnerOnlyFunctions"
+        ],
+        "rules": [
+          {
+            "score": 5,
+            "when": "usesReturnsDelta && externalCallsInSwapPath >= 1 && hasOwnerOnlyFunctions",
+            "rationale": "Custom settlement, a mid-swap dependency and a privileged surface together are every source of 'multi-step flows' and 'configuration patterns' the prose lists."
+          },
+          {
+            "score": 4,
+            "when": "usesReturnsDelta && externalCallsInSwapPath >= 1",
+            "rationale": "A hook that both alters settled amounts and leaves the swap path mid-flight has two interacting flows to reason about, not one."
+          },
+          {
+            "score": 3,
+            "when": "usesReturnsDelta || externalCallsInSwapPath >= 1",
+            "rationale": "Either a returns-delta permission or an external call in the swap path is a 'multi-step flow' in the prose's sense: the callback's effect is not local to itself."
+          },
+          {
+            "score": 2,
+            "when": "stateWritesInCallbacks >= 1 || callbacksImplemented >= 3",
+            "rationale": "Hook state written in callbacks is the 'branching logic' the prose names first; three or more callbacks is its 'number of callbacks'."
+          },
+          {
+            "score": 1,
+            "when": "callbacksImplemented >= 1",
+            "rationale": "One or two callbacks that write no hook state: observers and pass-through guards."
+          },
+          {
+            "score": 0,
+            "when": "callbacksImplemented == 0",
+            "rationale": "Nothing to branch on. A hook contract with no callback implemented is pass-through by construction."
+          }
+        ]
+      }
     },
     {
       "id": "customMath",
