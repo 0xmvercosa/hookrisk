@@ -8,7 +8,7 @@ is still open. Everything below is checkable against the branch.
 
 | | |
 |---|---|
-| Branch | `feat/hackathon-p0`. `origin` = `0xmvercosa/hookrisk` is the upstream author's repo and rejects pushes; the work is pushed to the private remote `mine` = `github.com/rafaelzochling/hookrisk` (make it public or move it to the hackathon repo when ready). `main` is the untouched upstream state. |
+| Branch | `feat/hackathon-p0`, pushed to `origin` = `0xmvercosa/hookrisk` (write access granted 2026-09-12; the local branch tracks it) and mirrored to the private backup remote `mine` = `github.com/rafaelzochling/hookrisk`. `main` is the untouched upstream state. |
 | Environment | `make setup` then `make test`. Expected green: 274 CLI tests, 45 harness tests (1 skipped), 29 detector tests, 3 corpus gates. `./scripts/doctor.sh` must show the detectors registered. |
 | Narrative | `HACKATHON.md` (what was found, what changed in two passes, limits) |
 | Per-change notes | `notes-A.md` … `notes-I.md` (A–E pass 1, F–I pass 2). Each has a "How to demo", "Caveats" and "Integrator" section. |
