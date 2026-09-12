@@ -23,6 +23,7 @@ import {
   encodeConstructorArgs,
   flagsFrom,
   locateArtifact,
+  parseObservations,
   parseRunRecord,
   permissionsFrom,
   readArtifact,
@@ -33,6 +34,7 @@ import {
   type ExecResult,
   type ForgeReport,
   type ForgeTestResult,
+  type Observations,
 } from './harness.js';
 
 // --------------------------------------------------------------------------- //
@@ -273,6 +275,128 @@ describe('translate', () => {
     const rows = { ...ALL_PASS, 'invariant_I3_noExitReverted()': invariantRow('Skipped') };
     const result = translate(report(rows), { customCurve: false });
     assert.equal(result.invariants.find((i) => i.id === 'I3')!.status, 'skipped');
+  });
+});
+
+// --------------------------------------------------------------------------- //
+// Observation log: a pass over nothing is not a pass
+// --------------------------------------------------------------------------- //
+
+/** Verbatim lines from HarnessValidation.t.sol: a busy sequence and an idle one. */
+const BUSY_LINE =
+  '{"swapsExecuted":3,"swapsCompared":3,"swapsSkipped":0,"hookedSwapReverted":false,"positionsOpened":1,' +
+  '"positionsClosed":1,"donations":1,"priceChecks":3,"monotonicityViolations":0,"exitFailures":0}';
+const IDLE_LINE =
+  '{"swapsExecuted":0,"swapsCompared":0,"swapsSkipped":0,"hookedSwapReverted":true,"positionsOpened":0,' +
+  '"positionsClosed":0,"donations":0,"priceChecks":0,"monotonicityViolations":0,"exitFailures":0}';
+
+const zero: Observations = {
+  swapsExecuted: 0, swapsCompared: 0, swapsSkipped: 0, hookedSwapReverted: 0, positionsOpened: 0,
+  positionsClosed: 0, donations: 0, priceChecks: 0, monotonicityViolations: 0, exitFailures: 0,
+};
+const observed = (totals: Partial<Observations>, sequences = 1280) => ({ sequences, totals: { ...zero, ...totals } });
+
+describe('parseObservations', () => {
+  test('sums the lines, counts booleans, and ignores the padding blank lines the harness leaves', () => {
+    const log = parseObservations(`${BUSY_LINE}\n\n${IDLE_LINE}\n\n${BUSY_LINE}\n\n`);
+    assert.equal(log.sequences, 3);
+    assert.deepEqual(log.totals, {
+      ...zero,
+      swapsExecuted: 6, swapsCompared: 6, hookedSwapReverted: 1, positionsOpened: 2, positionsClosed: 2,
+      donations: 2, priceChecks: 6,
+    });
+  });
+
+  test('an empty log is zero sequences, not an error', () => {
+    assert.deepEqual(parseObservations(''), { sequences: 0, totals: zero });
+  });
+
+  test('a line the CLI cannot read is refused with its number, never skipped', () => {
+    assert.throws(() => parseObservations(`${BUSY_LINE}\n{"swapsExecuted":1}\n`), /line 2: swapsCompared is undefined/);
+    assert.throws(() => parseObservations('{"swapsExecuted":-1'), /line 1 is not JSON/);
+    assert.throws(() => parseObservations(BUSY_LINE.replace('"swapsCompared":3', '"swapsCompared":"3"')), /swapsCompared is "3"/);
+  });
+});
+
+describe('translate with observations', () => {
+  const noObs = { customCurve: false, observations: observed({}) };
+
+  test('an all-passing report over sequences that exercised nothing is inconclusive on every invariant', () => {
+    // The Orbital shape before this existed: I1/I2/I3 passed on a pool that
+    // never traded, indistinguishable from a hook the harness had exercised.
+    const result = translate(report(ALL_PASS), noObs);
+    assert.equal(result.status, 'ok', 'the harness ran; it is the invariants that measured nothing');
+    assert.deepEqual(result.invariants.map((i) => i.status), ['inconclusive', 'inconclusive', 'inconclusive']);
+    const [i1, i2, i3] = result.invariants;
+    assert.match(i1!.detail ?? '', /^passed vacuously: 0 swaps landed and 0 positions opened across 1280 sequences/);
+    assert.match(i2!.detail ?? '', /^passed vacuously: 0 swaps compared across 1280 sequences/);
+    assert.match(i3!.detail ?? '', /^passed vacuously: 0 positions opened across 1280 sequences/);
+    assert.match(i3!.detail ?? '', /Observed: 1280 sequence\(s\), 0 swap\(s\) landed/);
+  });
+
+  test('sequences that did exercise the hook leave the passes alone', () => {
+    const result = translate(report(ALL_PASS), {
+      customCurve: false,
+      observations: observed({ swapsExecuted: 5000, swapsCompared: 4900, positionsOpened: 300, positionsClosed: 300 }),
+    });
+    assert.deepEqual(result.invariants.map((i) => i.status), ['passed', 'passed', 'passed']);
+    assert.equal(result.invariants[1]!.detail, undefined);
+  });
+
+  test('each invariant is judged by its own relevant count', () => {
+    const swapsOnly = translate(report(ALL_PASS), {
+      customCurve: false,
+      observations: observed({ swapsExecuted: 10, swapsCompared: 10 }),
+    });
+    assert.deepEqual(swapsOnly.invariants.map((i) => i.status), ['passed', 'passed', 'inconclusive']);
+
+    const positionsOnly = translate(report(ALL_PASS), {
+      customCurve: false,
+      observations: observed({ positionsOpened: 4, positionsClosed: 4 }),
+    });
+    assert.deepEqual(positionsOnly.invariants.map((i) => i.status), ['passed', 'inconclusive', 'passed']);
+  });
+
+  test('a custom curve is judged by price checks, not compared swaps', () => {
+    const checked = translate(report(ALL_PASS), {
+      customCurve: true,
+      observations: observed({ swapsExecuted: 10, priceChecks: 10 }),
+    });
+    assert.equal(checked.invariants[1]!.status, 'passed');
+
+    const unchecked = translate(report(ALL_PASS), { customCurve: true, observations: observed({ swapsExecuted: 10 }) });
+    assert.equal(unchecked.invariants[1]!.status, 'inconclusive');
+    assert.match(unchecked.invariants[1]!.detail ?? '', /^passed vacuously: 0 price checks/);
+    assert.match(unchecked.invariants[1]!.detail ?? '', /price monotonicity was asserted instead/, 'the custom-curve note is kept');
+  });
+
+  test('the Orbital case: custom curve, seed rejected, every hooked swap reverted', () => {
+    const result = translate(report(ALL_PASS), {
+      customCurve: true,
+      seeded: 'hooked-failed',
+      hookedSeedRevert: SETUP_FAILURE_REASON,
+      observations: observed({ hookedSwapReverted: 1280 }),
+    });
+    assert.deepEqual(result.invariants.map((i) => i.status), ['inconclusive', 'inconclusive', 'inconclusive']);
+    const i1 = result.invariants[0]!;
+    assert.match(i1.detail ?? '', /the hook rejected PoolManager liquidity \(beforeAddLiquidity \(0x259982e5\) reverted with Error\("No v4 Liquidity allowed"\)\) so the pool never traded/);
+    assert.match(i1.detail ?? '', /reverted with it in 1280 sequence\(s\)/);
+  });
+
+  test('a failure is evidence whatever the counters say', () => {
+    const rows = { ...ALL_PASS, 'invariant_I3_noExitReverted()': invariantRow('Failure', { reason: 'trapped' }) };
+    const result = translate(report(rows), noObs);
+    assert.equal(result.invariants[2]!.status, 'failed');
+  });
+
+  test('not-applicable rows from a rejected seed are not re-labelled', () => {
+    const result = translate(report(ALL_PASS), { ...noObs, seeded: 'hooked-failed' });
+    assert.deepEqual(result.invariants.map((i) => i.status), ['inconclusive', 'not-applicable', 'not-applicable']);
+  });
+
+  test('without an observation log the old behaviour is kept, so the pre-log harness still reads', () => {
+    const result = translate(report(ALL_PASS), { customCurve: false });
+    assert.deepEqual(result.invariants.map((i) => i.status), ['passed', 'passed', 'passed']);
   });
 });
 

@@ -530,6 +530,89 @@ export function parseRunRecord(text: string): HarnessRunInfo {
 }
 
 // --------------------------------------------------------------------------- //
+// Observation log
+// --------------------------------------------------------------------------- //
+
+/**
+ * What the handler actually did, summed over every completed sequence, from
+ * `harness/out/hookrisk-obs-<id>.jsonl` (one line per sequence, written by
+ * `afterInvariant`). Booleans in the line (`hookedSwapReverted`) become the
+ * number of sequences in which they were true.
+ *
+ * This is the evidence behind a pass. An invariant asserts a property of the
+ * state after a sequence; if the sequence never landed a swap or opened a
+ * position, the property held over nothing. Before this log existed a hook
+ * that refused PoolManager liquidity reported I1/I2/I3 `passed` on a pool that
+ * never traded — indistinguishable from a hook the harness had genuinely
+ * exercised.
+ */
+export interface Observations {
+  swapsExecuted: number;
+  swapsCompared: number;
+  swapsSkipped: number;
+  hookedSwapReverted: number;
+  positionsOpened: number;
+  positionsClosed: number;
+  donations: number;
+  priceChecks: number;
+  monotonicityViolations: number;
+  exitFailures: number;
+}
+
+export const OBSERVATION_FIELDS: ReadonlyArray<keyof Observations> = [
+  'swapsExecuted',
+  'swapsCompared',
+  'swapsSkipped',
+  'hookedSwapReverted',
+  'positionsOpened',
+  'positionsClosed',
+  'donations',
+  'priceChecks',
+  'monotonicityViolations',
+  'exitFailures',
+];
+
+export interface ObservationLog {
+  /** Lines summed. Forge runs each invariant function's sequences separately, so this is runs × invariant functions. */
+  sequences: number;
+  totals: Observations;
+}
+
+/**
+ * Sum the observation log. Blank lines are padding (the harness terminates
+ * each object itself so concurrent invariant threads cannot interleave two
+ * objects; forge's `writeLine` then adds a second newline). Anything else that
+ * is not exactly the ten-field object throws: a line the CLI cannot read is a
+ * harness/CLI version mismatch, and guessing would defeat the log's purpose.
+ */
+export function parseObservations(text: string): ObservationLog {
+  const totals = Object.fromEntries(OBSERVATION_FIELDS.map((f) => [f, 0])) as unknown as Observations;
+  let sequences = 0;
+  for (const [index, rawLine] of text.split('\n').entries()) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(line) as Record<string, unknown>;
+    } catch (err) {
+      throw new Error(`line ${index + 1} is not JSON (${(err as Error).message}): ${line.slice(0, 120)}`);
+    }
+    for (const field of OBSERVATION_FIELDS) {
+      const value = parsed[field];
+      if (typeof value === 'boolean') {
+        totals[field] += value ? 1 : 0;
+      } else if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+        totals[field] += value;
+      } else {
+        throw new Error(`line ${index + 1}: ${field} is ${JSON.stringify(value)}`);
+      }
+    }
+    sequences += 1;
+  }
+  return { sequences, totals };
+}
+
+// --------------------------------------------------------------------------- //
 // Running
 // --------------------------------------------------------------------------- //
 
@@ -566,6 +649,10 @@ export interface HarnessOutcome {
   durationMs: number;
   /** The harness's own account of setUp, when it wrote one. */
   run?: HarnessRunInfo;
+  /** Summed handler counters from the observation log; for the manifest's `coverage.observations`. */
+  observations?: Observations;
+  /** How many sequences those counters cover. */
+  observedSequences?: number;
 }
 
 /** Run the differential harness and translate the result. */
@@ -632,6 +719,7 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessOutcom
   const artifactName = basenameOf(options.sourceFile);
   const runId = randomUUID();
   const runRecordPath = join(harnessRoot, 'out', `hookrisk-run-${runId}.json`);
+  const observationsPath = join(harnessRoot, 'out', `hookrisk-obs-${runId}.jsonl`);
 
   options.log(
     `harness: ${artifactName}:${options.contractName} ` +
@@ -658,10 +746,11 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessOutcom
     },
   ).catch((err: Error) => ({ code: -1, stdout: '', stderr: err.message }));
 
-  // Read the run record before anything can return, and remove it: it is
-  // per-run scratch, and a stale one from an earlier run must never be read by
-  // a later one — hence the random id as well.
+  // Read the run record and the observation log before anything can return,
+  // and remove them: they are per-run scratch, and a stale one from an earlier
+  // run must never be read by a later one — hence the random id as well.
   const record = readRunRecord(runRecordPath);
+  const observed = readObservations(observationsPath);
 
   if (!proc.stdout.trim()) {
     return finish(failed(`forge produced no output: ${lastLines(proc.stderr, 3)}`), version);
@@ -675,6 +764,7 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessOutcom
   }
 
   if (record && 'error' in record) return finish(failed(record.error), version);
+  if (observed && 'error' in observed) return finish(failed(observed.error), version);
   const run = record ?? undefined;
 
   // The harness's view wins over ours when it has one: it read the permissions
@@ -683,10 +773,34 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessOutcom
   const translated = translate(report, {
     customCurve,
     ...(run ? { seeded: run.seeded, hookedSeedRevert: run.hookedSeedRevert } : {}),
+    ...(observed ? { observations: observed } : {}),
+  });
+
+  const withEvidence = (outcome: Omit<HarnessOutcome, 'durationMs' | 'version'>) => ({
+    ...outcome,
+    ...(run ? { run } : {}),
+    ...(observed ? { observations: observed.totals, observedSequences: observed.sequences } : {}),
   });
 
   if (translated.status === 'failed') {
-    return finish({ ...translated, ...(run ? { run } : {}) }, version);
+    return finish(withEvidence(translated), version);
+  }
+
+  if (run && !observed) {
+    // setUp finished (the record proves it) and forge reported invariant rows,
+    // yet no sequence left its counters behind. Either afterInvariant never
+    // ran or the harness predates the log; in both cases the passes above
+    // are unverifiable and must not be vouched for.
+    return finish(
+      withEvidence(
+        failed(
+          `the harness wrote its run record but no observation log at ${observationsPath}, so nothing says what ` +
+            'the sequences exercised and the invariant results cannot be weighed. The harness and CLI versions ' +
+            'may be out of step — rebuild both from the same checkout.',
+        ),
+      ),
+      version,
+    );
   }
 
   if (derive && !run) {
@@ -704,12 +818,36 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessOutcom
   }
 
   const failures = translated.invariants.filter((i) => i.status === 'failed').length;
+  const inconclusive = translated.invariants.filter((i) => i.status === 'inconclusive').length;
   options.log(
     `harness: ${translated.invariants.length} invariant(s), ${failures} failed` +
-      (run ? ` (flags=0x${run.flags.toString(16)}${run.permissionsDerived ? ' derived' : ''}, seeded=${run.seeded}${run.dynamicFee ? ', dynamic fee' : ''})` : ''),
+      (inconclusive ? `, ${inconclusive} inconclusive` : '') +
+      (run ? ` (flags=0x${run.flags.toString(16)}${run.permissionsDerived ? ' derived' : ''}, seeded=${run.seeded}${run.dynamicFee ? ', dynamic fee' : ''})` : '') +
+      (observed ? ` observed ${summariseObservations(observed)}` : ''),
   );
 
-  return finish({ status: 'ok', invariants: translated.invariants, ...(run ? { run } : {}) }, version);
+  return finish(withEvidence({ status: 'ok', invariants: translated.invariants }), version);
+}
+
+function readObservations(path: string): ObservationLog | { error: string } | null {
+  if (!existsSync(path)) return null;
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (err) {
+    return { error: `could not read the harness observation log ${path}: ${(err as Error).message}` };
+  } finally {
+    try {
+      unlinkSync(path);
+    } catch {
+      // Best effort; the random id keeps a leftover from ever being re-read.
+    }
+  }
+  try {
+    return parseObservations(text);
+  } catch (err) {
+    return { error: `the harness observation log ${path} is malformed (${(err as Error).message}).` };
+  }
 }
 
 function readRunRecord(path: string): HarnessRunInfo | { error: string } | null {
@@ -762,6 +900,8 @@ export interface TranslateOptions {
   customCurve: boolean;
   seeded?: 'both' | 'hooked-failed';
   hookedSeedRevert?: string;
+  /** Summed handler counters; when present, a pass over nothing is downgraded to `inconclusive`. */
+  observations?: ObservationLog;
 }
 
 export interface Translation {
@@ -876,7 +1016,64 @@ export function translate(report: ForgeReport, options: TranslateOptions): Trans
     }
   }
 
+  if (options.observations) {
+    for (const invariant of merged.values()) downgradeVacuousPass(invariant, options);
+  }
+
   return { status: 'ok', invariants: [...merged.values()].sort((a, b) => a.id.localeCompare(b.id)) };
+}
+
+/**
+ * A pass over sequences that exercised nothing is `inconclusive`, with the
+ * counts in the detail so a reader can see what "nothing" was.
+ *
+ * What counts as relevant differs per invariant: I2 compares swap outputs, so
+ * it needs compared swaps; I2b checks price direction, so it needs price
+ * checks; I3 withdraws positions, so it needs positions; I1 sums balances
+ * after anything at all landed. Only a `passed` row is touched — a failure is
+ * evidence whatever the counters say, and the other statuses already carry
+ * their own explanation.
+ */
+function downgradeVacuousPass(invariant: InvariantResult, options: TranslateOptions): void {
+  if (invariant.status !== 'passed') return;
+  const { totals, sequences } = options.observations!;
+
+  let vacuous: string | null = null;
+  if (invariant.id === 'I1' && totals.swapsExecuted + totals.positionsOpened === 0) {
+    vacuous = '0 swaps landed and 0 positions opened';
+  } else if (invariant.id === 'I2' && !options.customCurve && totals.swapsCompared === 0) {
+    vacuous = '0 swaps compared';
+  } else if (invariant.id === 'I2' && options.customCurve && totals.priceChecks === 0) {
+    vacuous = '0 price checks';
+  } else if (invariant.id === 'I3' && totals.positionsOpened === 0) {
+    vacuous = '0 positions opened';
+  }
+  if (!vacuous) return;
+
+  const why: string[] = [];
+  if (options.seeded === 'hooked-failed') {
+    const revert = options.hookedSeedRevert ? ` (${describeRevert(unwrapRevert(options.hookedSeedRevert))})` : '';
+    why.push(`the hook rejected PoolManager liquidity${revert} so the pool never traded`);
+  }
+  if (totals.hookedSwapReverted > 0) {
+    why.push(`a swap that worked without the hook reverted with it in ${totals.hookedSwapReverted} sequence(s)`);
+  }
+
+  invariant.status = 'inconclusive';
+  invariant.detail =
+    `passed vacuously: ${vacuous} across ${sequences} sequences` +
+    (why.length ? `; ${why.join('; ')}` : '') +
+    `. Observed: ${summariseObservations(options.observations!)}.` +
+    (invariant.detail ? ` ${invariant.detail}` : '');
+}
+
+function summariseObservations({ totals, sequences }: ObservationLog): string {
+  return (
+    `${sequences} sequence(s), ${totals.swapsExecuted} swap(s) landed, ${totals.swapsCompared} compared, ` +
+    `${totals.priceChecks} price check(s), ${totals.positionsOpened} position(s) opened, ` +
+    `${totals.positionsClosed} closed, ${totals.donations} donation(s), ` +
+    `${totals.hookedSwapReverted} hooked-only swap revert(s), ${totals.exitFailures} exit failure(s)`
+  );
 }
 
 function toInvariant(id: 'I1' | 'I2' | 'I3', name: string, result: ForgeTestResult): InvariantResult {

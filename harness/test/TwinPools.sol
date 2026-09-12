@@ -440,6 +440,21 @@ abstract contract TwinPools is Test, Deployers {
         vm.writeFile(string.concat("out/hookrisk-run-", runId, ".json"), json);
     }
 
+    /// @notice Append one sequence's observations to `out/hookrisk-obs-<runId>.jsonl`.
+    ///
+    /// Called from `afterInvariant`, once per completed sequence. Forge runs
+    /// the invariant functions of one contract in parallel, each with its own
+    /// sequences, so several threads append to this file at once. `writeLine`
+    /// writes the line and its newline as two separate calls, which under
+    /// contention can interleave as `{a}{b}\n\n`; the newline is therefore
+    /// part of the payload so every JSON object reaches the file in one
+    /// write, and the reader treats the blank lines that result as padding.
+    /// An empty run id means the CLI did not ask; write nothing.
+    function _writeObservationLine(string memory runId, string memory json) internal {
+        if (bytes(runId).length == 0) return;
+        vm.writeLine(string.concat("out/hookrisk-obs-", runId, ".jsonl"), string.concat(json, "\n"));
+    }
+
     // --- helpers -------------------------------------------------------------
 
     /// @notice Mint both currencies to `who`.
