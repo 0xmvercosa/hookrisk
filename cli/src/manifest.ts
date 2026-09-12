@@ -23,6 +23,7 @@ import type { ScoreResult } from './scoring/score.js';
 import type { EngineResult, Finding, RuleClass, Severity } from './types.js';
 import { SEVERITIES, isClassification, severityRank } from './types.js';
 import type { UncoveredFunction } from './engines/slither.js';
+import { summariseProbes, type HarnessProbes } from './harness.js';
 import type { GatePolicy } from './config.js';
 
 export const SCHEMA_VERSION = '1.0.0';
@@ -830,6 +831,7 @@ export function renderMarkdown(manifest: Manifest): string {
       out.push(`| Pricing | ${run.customCurve ? 'custom curve: output comparison replaced by price monotonicity' : 'v4 pricing: output compared against the reference pool'} |`);
       out.push(`| Pool fee | ${run.dynamicFee ? 'dynamic (static fee rejected by the hook)' : 'static'} |`);
       out.push(`| Initial liquidity | ${run.seeded === 'both' ? 'seeded on both pools' : `the hook rejected PoolManager liquidity${run.hookedSeedRevert ? ` (\`${String(run.hookedSeedRevert).slice(0, 10)}…\`)` : ''}`} |`);
+      if (run.probes) out.push(`| Execution probes | ${cell(summariseProbes(run.probes as HarnessProbes))} |`);
       out.push('');
     }
     if (invariants.length > 0) {

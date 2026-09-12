@@ -38,11 +38,14 @@ broad rule because the guard already says the writer is privileged.
 
 from __future__ import annotations
 
+from slither.core.declarations.solidity_variables import SolidityVariableComposed
 from slither.core.declarations import Contract, Function
 from slither.core.solidity_types import MappingType
+from slither.slithir.operations import HighLevelCall, InternalCall, LibraryCall
 from slither.utils.output import Output
 
 from ..utils.hook_analysis import (
+    reachable_functions,
     access_guard,
     callback_read_state,
     calls_named_in,
@@ -71,6 +74,60 @@ _FEE_SETTERS = frozenset({"updateDynamicLPFee"})
 #: caller their own balance is a user surface, and telling that apart from an
 #: open sweep needs the accounting, not the call.
 _VALUE_MOVERS = frozenset({"take", "settle", "transfer", "safeTransfer", "transferFrom", "safeTransferFrom"})
+
+
+
+def caller_has_stake(function: Function, contract: Contract) -> bool:
+    """Whether the caller pays for, or draws on, their own position in this function.
+
+    An AMM's deposit and withdraw paths are permissionless by design: anyone
+    may add liquidity because they fund it, and anyone may remove liquidity
+    because it burns their own shares. Both change the reserves the swap reads,
+    which is exactly what HS-03's unguarded shape looks for — so without this
+    check every custom-curve hook's liquidity path would be reported as an
+    open admin surface. The signal is structural: a token pull whose `from`
+    is msg.sender, or a mapping-typed state variable indexed by msg.sender
+    (a balance, a share count, a position) read or written on the way.
+    """
+    for fn in reachable_functions(function, contract) | {function}:
+        for node in fn.nodes:
+            reads_sender = any(
+                isinstance(v, SolidityVariableComposed) and v.name == "msg.sender" for v in node.variables_read
+            )
+            if not reads_sender:
+                continue
+            touches_mapping = any(
+                isinstance(v.type, MappingType) for v in list(node.state_variables_read) + list(node.state_variables_written)
+            )
+            if touches_mapping:
+                return True
+            for ir in node.irs:
+                if isinstance(ir, (HighLevelCall, LibraryCall)) and str(ir.function_name) in ("transferFrom", "safeTransferFrom"):
+                    if any(isinstance(a, SolidityVariableComposed) and a.name == "msg.sender" for a in ir.arguments):
+                        return True
+                # `_burn(msg.sender, shares)`, `_mint(msg.sender, ...)`: the
+                # position is the caller's, but the mapping index is the
+                # callee's parameter, so follow the call once.
+                if isinstance(ir, InternalCall) and any(
+                    isinstance(a, SolidityVariableComposed) and a.name == "msg.sender" for a in ir.arguments
+                ):
+                    callee = getattr(ir, "function", None)
+                    # A token base (anything exposing balanceOf) keeps the
+                    # caller's position; solady's ERC20 does so in assembly
+                    # slots, where no mapping is visible, so the declaring
+                    # contract's shape is the signal, not its storage.
+                    if isinstance(callee, Function) and any(
+                        f.name == "balanceOf" for f in callee.contract_declarer.functions
+                    ):
+                        return True
+                    if isinstance(callee, Function) and any(
+                        isinstance(v.type, MappingType)
+                        for callee_fn in reachable_functions(callee, contract) | {callee}
+                        for callee_node in callee_fn.nodes
+                        for v in list(callee_node.state_variables_read) + list(callee_node.state_variables_written)
+                    ):
+                        return True
+    return False
 
 
 class AdminSurface(HookriskDetector):
@@ -127,6 +184,26 @@ the admin key the framework asks about: whoever holds it can set the fee to
             if guard is None:
                 scalars = sorted(v.name for v in written if not isinstance(v.type, MappingType))
                 if not scalars and not sets_fee:
+                    continue
+                if not sets_fee and caller_has_stake(function, contract):
+                    # The caller funds it or draws on their own position: a
+                    # user surface, permissionless by design. Listed at LOW
+                    # because it does change what the callbacks read, so a
+                    # reviewer should know the reserves move outside the
+                    # PoolManager's own liquidity path.
+                    results.append(
+                        self._report(
+                            [
+                                self._anchor(contract, function),
+                                f" ({function.name}) is a user-facing function — the caller pays for or "
+                                "draws on their own position — that "
+                                + _describe(scalars, sets_fee)
+                                + ". Permissionless by design for a liquidity path; not an admin surface.\n",
+                            ],
+                            discriminator=function.name,
+                            impact=DetectorClassification.LOW,
+                        )
+                    )
                     continue
                 results.append(
                     self._report(

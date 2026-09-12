@@ -415,15 +415,17 @@ describe('reconcileLayers: probes and the seed revert together', () => {
       },
       sourceFile: 'src/OrbitalHook.sol',
     });
+    // The swap callback's revert is the idle-pool condition (a custom curve
+    // that refused its seed has no reserves), already reported through the
+    // inconclusive invariants; it is not a selector defect.
     assert.deepEqual(
       findings.map((f) => f.ruleClass),
-      ['callback-intentionally-disabled', 'hook-profile', 'unvalidated-pool-key', 'callback-selector-mismatch'],
+      ['callback-intentionally-disabled', 'hook-profile', 'unvalidated-pool-key'],
     );
     assert.equal(findings[0]!.engines.length, 2, 'the seed merge still happens');
-    assert.equal(findings[3]!.function?.name, 'beforeSwap', 'only the swap callback is a selector finding');
     assert.equal(out.find((i) => i.id === 'I3')!.status, 'not-applicable');
-    assert.equal(notes.length, 5);
-    assert.match(notes[3]!, /beforeAddLiquidity reverted under the selector probe, but finding id-beforeAddLiquidity classifies it as intentionally disabled/);
+    assert.ok(notes.some((n) => /beforeAddLiquidity reverted under the selector probe, but finding id-beforeAddLiquidity classifies it as intentionally disabled/.test(n)));
+    assert.ok(notes.some((n) => /beforeSwap reverted under the selector probe on a custom curve that refused its seed/.test(n)));
   });
 
   test('a reverted selector verdict on a callback the harness itself classified as disabled is not a second finding', () => {

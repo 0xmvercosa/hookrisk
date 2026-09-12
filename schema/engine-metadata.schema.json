@@ -40,12 +40,16 @@
     },
     "informsDimensions": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Framework scoring dimensions this finding informs (names from schema/framework-rubric.json)."
     },
     "informsTriggers": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Framework feature triggers this finding can activate."
     },
     "isClassification": {
@@ -66,11 +70,15 @@
           "callbacksDeclared",
           "stateWritesInCallbacks",
           "externalCallsInSwapPath",
+          "externalCallsInSwapPathThirdParty",
           "internalFunctionsReachableFromCallbacks",
           "usesReturnsDelta",
           "hasOwnerOnlyFunctions"
         ],
-        "destination": ["isStatic", "unhandled"]
+        "destination": [
+          "isStatic",
+          "unhandled"
+        ]
       },
       "properties": {
         "destination": {
@@ -129,7 +137,9 @@
     "permissions": {
       "type": "object",
       "description": "The resolved getHookPermissions() set, inheritance followed: every field of Hooks.Permissions with the literal it is assigned. Absent when the contract declares none, which is itself meaningful (the hook relies on address bits alone).",
-      "additionalProperties": { "type": "boolean" },
+      "additionalProperties": {
+        "type": "boolean"
+      },
       "propertyNames": {
         "enum": [
           "beforeInitialize",

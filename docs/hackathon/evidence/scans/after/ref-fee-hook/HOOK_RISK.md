@@ -50,15 +50,17 @@ No defects.
 - **Custom math**
   - Not measured: custom-accounting requires hookrisk, which did not run; no detector for rounding-direction yet.
 - **External dependencies**
-  - Not measured: no detector for external-call-in-swap-path yet.
+  - Not measured: external-call-in-swap-path requires hookrisk, which did not run.
 - **TVL potential**
   - Declared in hookrisk.toml. hookrisk does not measure tvlPotential.
 - **Team maturity**
   - Declared in hookrisk.toml. hookrisk does not measure teamMaturity.
 - **Upgradeability**
   - Not measured: no detector for upgradeable-hook (needs blocksec, which did not run); selfdestruct requires blocksec, which did not run.
+- **Autonomous parameter updates**
+  - Not measured: admin-surface requires hookrisk, which did not run.
 - **Price impacting behavior**
-  - Not measured: custom-accounting requires hookrisk, which did not run; no detector for unbounded-dynamic-fee yet.
+  - Not measured: custom-accounting requires hookrisk, which did not run; unbounded-dynamic-fee requires hookrisk, which did not run.
 
 </details>
 

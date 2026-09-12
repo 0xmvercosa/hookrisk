@@ -47,6 +47,102 @@
       ]
     },
     {
+      "id": "02eb357de7a4609e",
+      "ruleClass": "admin-surface",
+      "title": "V2PairHook.mint(address) (src/V2PairHook.sol#68-90) (mint) is callable by anyone — it never restricts msg.sender — and writes `reserves0`, `reserves1` which …",
+      "description": "V2PairHook.mint(address) (src/V2PairHook.sol#68-90) (mint) is callable by anyone — it never restricts msg.sender — and writes `reserves0`, `reserves1` which the callbacks read. Whoever calls it decides what the next swap pays or does.",
+      "severity": "high",
+      "confidence": "medium",
+      "location": {
+        "file": "src/V2PairHook.sol",
+        "line": 68,
+        "endLine": 90
+      },
+      "function": {
+        "name": "mint"
+      },
+      "discriminator": "mint",
+      "evidence": [
+        "V2PairHook.mint(address) (src/V2PairHook.sol#68-90) (mint) is callable by anyone — it never restricts msg.sender — and writes `reserves0`, `reserves1` which the callbacks read. Whoever calls it decides what the next swap pays or does."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-admin-surface",
+          "severity": "high",
+          "confidence": "medium"
+        }
+      ],
+      "informsDimensions": [
+        "autonomousParameterUpdates",
+        "complexity"
+      ]
+    },
+    {
+      "id": "2c5bbdee471e8bd4",
+      "ruleClass": "admin-surface",
+      "title": "V2PairHook.burn(address) (src/V2PairHook.sol#93-110) (burn) is callable by anyone — it never restricts msg.sender — and writes `reserves0`, `reserves1` which …",
+      "description": "V2PairHook.burn(address) (src/V2PairHook.sol#93-110) (burn) is callable by anyone — it never restricts msg.sender — and writes `reserves0`, `reserves1` which the callbacks read. Whoever calls it decides what the next swap pays or does.",
+      "severity": "high",
+      "confidence": "medium",
+      "location": {
+        "file": "src/V2PairHook.sol",
+        "line": 93,
+        "endLine": 110
+      },
+      "function": {
+        "name": "burn"
+      },
+      "discriminator": "burn",
+      "evidence": [
+        "V2PairHook.burn(address) (src/V2PairHook.sol#93-110) (burn) is callable by anyone — it never restricts msg.sender — and writes `reserves0`, `reserves1` which the callbacks read. Whoever calls it decides what the next swap pays or does."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-admin-surface",
+          "severity": "high",
+          "confidence": "medium"
+        }
+      ],
+      "informsDimensions": [
+        "autonomousParameterUpdates",
+        "complexity"
+      ]
+    },
+    {
+      "id": "3335949074be4c53",
+      "ruleClass": "admin-surface",
+      "title": "V2PairHook.sync() (src/V2PairHook.sol#119-121) (sync) is callable by anyone — it never restricts msg.sender — and writes `reserves0`, `reserves1` which the …",
+      "description": "V2PairHook.sync() (src/V2PairHook.sol#119-121) (sync) is callable by anyone — it never restricts msg.sender — and writes `reserves0`, `reserves1` which the callbacks read. Whoever calls it decides what the next swap pays or does.",
+      "severity": "high",
+      "confidence": "medium",
+      "location": {
+        "file": "src/V2PairHook.sol",
+        "line": 119,
+        "endLine": 121
+      },
+      "function": {
+        "name": "sync"
+      },
+      "discriminator": "sync",
+      "evidence": [
+        "V2PairHook.sync() (src/V2PairHook.sol#119-121) (sync) is callable by anyone — it never restricts msg.sender — and writes `reserves0`, `reserves1` which the callbacks read. Whoever calls it decides what the next swap pays or does."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-admin-surface",
+          "severity": "high",
+          "confidence": "medium"
+        }
+      ],
+      "informsDimensions": [
+        "autonomousParameterUpdates",
+        "complexity"
+      ]
+    },
+    {
       "id": "cc07c2e9a89d4d3c",
       "ruleClass": "custom-accounting",
       "title": "V2PairHook (src/V2PairHook.sol#21-284) declares custom-accounting permissions: `afterSwapReturnDelta` (bit 2), `beforeSwapReturnDelta` (bit 3)",
@@ -134,6 +230,7 @@
         "callbacksDeclared": 4,
         "stateWritesInCallbacks": 2,
         "externalCallsInSwapPath": 4,
+        "externalCallsInSwapPathThirdParty": 0,
         "internalFunctionsReachableFromCallbacks": 4,
         "usesReturnsDelta": true,
         "hasOwnerOnlyFunctions": false
@@ -157,8 +254,8 @@
     }
   ],
   "score": {
-    "total": 13,
-    "totalUpperBound": 25,
+    "total": 15,
+    "totalUpperBound": 24,
     "tier": "medium",
     "tierUpperBound": "high",
     "inconclusive": true,
@@ -177,7 +274,7 @@
         "bracketLabel": "Returns a delta and makes an external call in the swap path",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "hook-profile metrics: callbacksImplemented=2, callbacksDeclared=4, stateWritesInCallbacks=2, externalCallsInSwapPath=4, internalFunctionsReachableFromCallbacks=4, usesReturnsDelta=true, hasOwnerOnlyFunctions=false",
+          "hook-profile metrics: callbacksImplemented=2, callbacksDeclared=4, stateWritesInCallbacks=2, externalCallsInSwapPath=4, externalCallsInSwapPathThirdParty=0, internalFunctionsReachableFromCallbacks=4, usesReturnsDelta=true, hasOwnerOnlyFunctions=false",
           "Scored 4 by rule `usesReturnsDelta && externalCallsInSwapPath >= 1`: A hook that both alters settled amounts and leaves the swap path mid-flight has two interacting flows to reason about, not one. (hookrisk’s interpretation; the framework publishes no brackets)",
           "1 unprotected-hook-callback finding(s)",
           "The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target."
@@ -205,7 +302,7 @@
         "bracketLabel": null,
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: no detector for external-call-in-swap-path yet."
+          "Not measured: external-call-in-swap-path requires hookrisk; hookrisk ran but did not analyse the target (V2PairHook uses a hook ABI hookrisk cannot analyse: V2PairHook (src/V2PairHook.sol#21-284) implements afterAddLiquidity, afterInitialize, afterRemoveLiquidity, beforeAddLiquidity, beforeInitialize, …)."
         ]
       },
       {
@@ -257,12 +354,16 @@
       {
         "id": "autonomousParameterUpdates",
         "name": "Autonomous parameter updates",
-        "value": null,
+        "value": 2,
         "max": 3,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "Self-adjusting with bounds but no rate limit, or vice versa",
         "bracketsAreInterpretation": true,
-        "evidence": []
+        "evidence": [
+          "3 admin-surface finding(s)",
+          "Scored 2 by rule `severityRank >= 3` on mint (high): HS-03 at HIGH is an unguarded state-changing external function: anybody can move the hook's parameters, so no access control enforces bounds or a rate limit. Scored 2 rather than 3 because the 3 bracket describes a hook that adjusts itself — here a caller still has to act — and never 0, because 0 is 'all parameters set by an explicit privileged call' and an unguarded call is not privileged. (hookrisk’s interpretation; the framework publishes no brackets)",
+          "HS-03 found a state-changing external function on the hook. The framework grades this dimension by the guardrails on a parameter change (bounds, rate limit, gating); an admin surface is where those guardrails would have to live."
+        ]
       },
       {
         "id": "priceImpactingBehavior",
@@ -285,6 +386,14 @@
         "firedBy": [
           "customMath >= 3 (is 3)",
           "returns-delta-permission"
+        ],
+        "derivationIsInterpretation": true
+      },
+      {
+        "id": "autonomous",
+        "name": "Autonomous Parameter Updates or Self-Tuning Hook",
+        "firedBy": [
+          "autonomousParameterUpdates >= 1 (is 2)"
         ],
         "derivationIsInterpretation": true
       },
@@ -339,6 +448,23 @@
         ]
       },
       {
+        "action": "invariant-testing",
+        "label": "Invariant and stateful fuzz testing",
+        "strength": "required",
+        "sources": [
+          {
+            "from": "trigger:custom-math",
+            "strength": "recommended",
+            "detail": "Stateful fuzzing may significantly improve assurance"
+          },
+          {
+            "from": "trigger:autonomous",
+            "strength": "required",
+            "detail": "For state transitions"
+          }
+        ]
+      },
+      {
         "action": "math-specialist-audit",
         "label": "Audit by a math and invariants specialist",
         "strength": "required",
@@ -356,6 +482,18 @@
         ]
       },
       {
+        "action": "recovery-procedures",
+        "label": "Documented debugging and recovery procedures",
+        "strength": "required",
+        "sources": [
+          {
+            "from": "trigger:autonomous",
+            "strength": "required",
+            "detail": "Debugging and recovery procedures must be documented"
+          }
+        ]
+      },
+      {
         "action": "static-analysis",
         "label": "Automated static analysis",
         "strength": "required",
@@ -368,6 +506,18 @@
         ]
       },
       {
+        "action": "timelock-or-minimise-upgradeability",
+        "label": "Minimise or timelock upgradeability",
+        "strength": "required",
+        "sources": [
+          {
+            "from": "trigger:autonomous",
+            "strength": "required",
+            "detail": "Upgradeability must be minimized or time-locked"
+          }
+        ]
+      },
+      {
         "action": "unit-tests-boundaries",
         "label": "Unit tests covering input-range boundaries",
         "strength": "required",
@@ -376,6 +526,26 @@
             "from": "trigger:custom-math",
             "strength": "required",
             "detail": "Validate intermediate steps, edge cases and input-range boundaries"
+          }
+        ]
+      },
+      {
+        "action": "monitoring",
+        "label": "Continuous monitoring with anomaly detection",
+        "strength": "strongly-recommended",
+        "sources": [
+          {
+            "from": "tier:medium",
+            "strength": "recommended",
+            "detail": "If external dependencies exist"
+          },
+          {
+            "from": "trigger:custom-math",
+            "strength": "recommended"
+          },
+          {
+            "from": "trigger:autonomous",
+            "strength": "strongly-recommended"
           }
         ]
       },
@@ -399,33 +569,9 @@
           {
             "from": "trigger:custom-math",
             "strength": "recommended"
-          }
-        ]
-      },
-      {
-        "action": "invariant-testing",
-        "label": "Invariant and stateful fuzz testing",
-        "strength": "recommended",
-        "sources": [
-          {
-            "from": "trigger:custom-math",
-            "strength": "recommended",
-            "detail": "Stateful fuzzing may significantly improve assurance"
-          }
-        ]
-      },
-      {
-        "action": "monitoring",
-        "label": "Continuous monitoring with anomaly detection",
-        "strength": "recommended",
-        "sources": [
-          {
-            "from": "tier:medium",
-            "strength": "recommended",
-            "detail": "If external dependencies exist"
           },
           {
-            "from": "trigger:custom-math",
+            "from": "trigger:price-impact",
             "strength": "recommended"
           }
         ]
@@ -433,21 +579,24 @@
       {
         "action": "second-audit",
         "label": "Second independent audit",
-        "strength": "optional",
+        "strength": "recommended",
         "sources": [
           {
             "from": "tier:medium",
             "strength": "optional",
             "detail": "For math or complex components"
+          },
+          {
+            "from": "trigger:autonomous",
+            "strength": "recommended"
           }
         ]
       }
     ],
     "warnings": [
-      "4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
+      "3 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
       "trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured",
       "trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured",
-      "trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured",
       "trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured"
     ]
   },
@@ -457,8 +606,8 @@
       "displayName": "hookrisk Slither detectors",
       "version": "0.11.6",
       "status": "ok",
-      "findingCount": 4,
-      "durationMs": 13144
+      "findingCount": 7,
+      "durationMs": 10724
     },
     {
       "engine": "harness",
@@ -468,7 +617,7 @@
       "reason": "harness setUp failed: TwinPools: hook constructor reverted: 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).",
       "errorCode": "HR-E304",
       "findingCount": 0,
-      "durationMs": 252
+      "durationMs": 193
     }
   ],
   "coverage": {
@@ -523,7 +672,7 @@
     "failOnNotAnalysed": true,
     "failures": [
       "the differential harness failed: harness setUp failed: TwinPools: hook constructor reverted: 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).",
-      "1 finding(s) at or above high: V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never …"
+      "4 finding(s) at or above high: V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never …; V2PairHook.mint(address) (src/V2PairHook.sol#68-90) (mint) is callable by anyone — it never restricts msg.sender — and writes `reserves0`, `reserves1` which …; V2PairHook.burn(address) (src/V2PairHook.sol#93-110) (burn) is callable by anyone — it never restricts msg.sender — and writes `reserves0`, `reserves1` which …"
     ]
   }
 }

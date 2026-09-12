@@ -46,6 +46,8 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
@@ -138,5 +140,35 @@ contract RoleAdminHook is FeeReadingHook, AccessControl {
 
     function setFee(uint24 newFee) external onlyRole(FEE_ROLE) {
         feeBips = newFee;
+    }
+}
+
+
+/// @dev A custom-curve style liquidity path: anyone may deposit because they
+/// pay, anyone may withdraw because it burns their own shares. It writes the
+/// reserve the swap reads, so HS-03's unguarded shape would call it an open
+/// admin surface; the caller's stake is what makes it a user surface instead.
+/// Expected: HS-03 at LOW on both functions, never HIGH.
+contract UserLiquidityHook is FeeReadingHook {
+    mapping(address => uint256) public shares;
+    uint256 public reserve;
+
+    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
+
+    function deposit(uint256 amount) external {
+        IERC20Minimal(Currency.unwrap(currencyOf())).transferFrom(msg.sender, address(this), amount);
+        shares[msg.sender] += amount;
+        reserve += amount;
+        feeBips = uint24(reserve % 10_000);
+    }
+
+    function withdraw(uint256 amount) external {
+        shares[msg.sender] -= amount;
+        reserve -= amount;
+        feeBips = uint24(reserve % 10_000);
+    }
+
+    function currencyOf() internal pure returns (Currency) {
+        return Currency.wrap(address(0x1234));
     }
 }

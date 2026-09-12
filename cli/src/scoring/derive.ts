@@ -554,7 +554,15 @@ export function deriveScoringInput(options: DeriveOptions): ScoringInput {
       const hits = byClass.get(ruleClass);
       if (!hits?.length) continue;
       const shaped = scoreFromFindings(findingRules, ruleClass, hits);
-      const value = shaped?.score ?? rule.scoreFor[ruleClass] ?? 1;
+      let value = shaped?.score ?? rule.scoreFor[ruleClass] ?? 1;
+      if (ruleClass === 'custom-accounting' && liquidityOnlyDelta(findings, contractName)) {
+        // after{Add,Remove}LiquidityReturnDelta only: the hook adjusts what an
+        // LP settles, never a swap. Price impact is real but indirect and the
+        // arithmetic is settlement math, not a curve. Swaps still compare
+        // against the reference pool, so I2 applies unchanged.
+        value = id === 'priceImpactingBehavior' ? 1 : id === 'customMath' ? 2 : value;
+        evidence.push('returns-delta is liquidity-side only (no swap delta); swaps still compare against the reference pool');
+      }
       if (measured === null || value > measured) measured = value;
       evidence.push(`${hits.length} ${ruleClass} finding(s)`);
       if (shaped) {
@@ -589,7 +597,11 @@ export function deriveScoringInput(options: DeriveOptions): ScoringInput {
     // capable of finding something actually looked — and on whether the
     // dimension is one that silence can measure at all.
     const missing = coverageGaps(rule.raisedBy, looked, declined);
-    if (missing.length === 0 && !rule.unmeasuredWhenSilent) {
+    // Silence alone cannot measure a dimension flagged unmeasuredWhenSilent,
+    // but silence corroborated by a positive measurement can: the hook
+    // profile counted the thing whose absence the dimension's 0 asserts.
+    const corroboration = missing.length === 0 ? silenceCorroboratedBy(id, findings, contractName) : null;
+    if (missing.length === 0 && (!rule.unmeasuredWhenSilent || corroboration)) {
       dimensions[id] =
         declaredValue !== undefined
           ? { value: declaredValue, source: 'declared' as ValueSource }
@@ -599,6 +611,7 @@ export function deriveScoringInput(options: DeriveOptions): ScoringInput {
               evidence: [
                 `No ${rule.raisedBy.join(' or ')} findings, and every detector that could ` +
                   'produce one ran.',
+                ...(corroboration ? [corroboration] : []),
               ],
             };
     } else {
@@ -698,4 +711,35 @@ function externalCallsInSwapPath(findings: Finding[], contractName?: string): nu
   const metrics = profile ? profileMetrics(profile) : null;
   const value = metrics?.externalCallsInSwapPath;
   return typeof value === 'number' ? value : null;
+}
+
+/**
+ * What in the hook profile lets a silent detector's 0 stand.
+ *
+ * Each dimension names the profile metric whose value would contradict the
+ * silence: a returns-delta flag for price impact, an owner-only surface for
+ * autonomous parameter updates, a third-party call in the swap path for
+ * external dependencies. When the metric says "none", the detector's silence
+ * and the profile's count agree, and 0 is a measurement rather than a guess.
+ */
+function silenceCorroboratedBy(id: string, findings: Finding[], contractName?: string): string | null {
+  const profile = hookProfileOf(findings, contractName)?.profile;
+  const metrics = profile ? profileMetrics(profile) : null;
+  if (!metrics) return null;
+  switch (id) {
+    case 'priceImpactingBehavior':
+      return metrics.usesReturnsDelta === false
+        ? 'Corroborated by the hook profile: no returns-delta permission, and HS-06 found no unbounded dynamic fee.'
+        : null;
+    case 'autonomousParameterUpdates':
+      return metrics.hasOwnerOnlyFunctions === false
+        ? 'Corroborated by the hook profile: no owner-only surface, and HS-03 found no unguarded mutator of callback-read state.'
+        : null;
+    case 'externalDependencies':
+      return metrics.externalCallsInSwapPathThirdParty === 0
+        ? 'Corroborated by the hook profile: zero third-party calls in the swap path.'
+        : null;
+    default:
+      return null;
+  }
 }

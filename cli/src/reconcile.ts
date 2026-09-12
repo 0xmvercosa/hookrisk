@@ -102,8 +102,8 @@ export const EXCLUSIVITY_RULE = 'exclusivity-probe';
 // The two classes the probes introduce. Declared in `types.ts` by the scoring
 // workstream; typed through `RuleClass` here so the manifest's taxonomy stays
 // the single list. The casts go once the union carries both names.
-const UNVALIDATED_POOL_KEY = 'unvalidated-pool-key' as RuleClass;
-const SELECTOR_MISMATCH = 'callback-selector-mismatch' as RuleClass;
+const UNVALIDATED_POOL_KEY: RuleClass = 'unvalidated-pool-key';
+const SELECTOR_MISMATCH: RuleClass = 'callback-selector-mismatch';
 
 /** The callback the PoolManager invokes for the harness's seed position. */
 const SEED_CALLBACK = 'beforeAddLiquidity';
@@ -133,7 +133,7 @@ export function reconcileLayers(input: ReconcileInput): ReconcileOutput {
   if (run.probes) {
     reconcileEoaGuard(run.probes, findings, notes, location);
     reconcileExclusivity(run.probes, findings, notes, location);
-    reconcileSelectors(run.probes, findings, notes, location);
+    reconcileSelectors(run, run.probes, findings, notes, location);
   }
 
   return { findings, invariants, notes };
@@ -299,6 +299,7 @@ function reconcileExclusivity(
 // --------------------------------------------------------------------------- //
 
 function reconcileSelectors(
+  run: HarnessRunInfo | undefined,
   probes: HarnessProbes,
   findings: Finding[],
   notes: string[],
@@ -317,6 +318,17 @@ function reconcileSelectors(
       notes.push(
         `reconcile: ${callback} reverted under the selector probe, but finding ${disabled.id} classifies it as ` +
           'intentionally disabled; not reported as a selector mismatch',
+      );
+      continue;
+    }
+    // A custom curve whose reserves never arrived (the hook refused the seed)
+    // reverts every swap on arithmetic, not on a wrong answer. That is the
+    // same idle-pool condition that makes its invariants inconclusive, and a
+    // HIGH here would be a second report of it.
+    if (verdict === 'reverted' && run?.customCurve && run.seeded === 'hooked-failed') {
+      notes.push(
+        `reconcile: ${callback} reverted under the selector probe on a custom curve that refused its seed ` +
+          '(no reserves); not reported as a selector mismatch — see the inconclusive invariants',
       );
       continue;
     }

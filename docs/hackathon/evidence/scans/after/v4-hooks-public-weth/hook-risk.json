@@ -15,6 +15,43 @@
   },
   "findings": [
     {
+      "id": "0b9dc8497a331008",
+      "ruleClass": "external-call-in-swap-path",
+      "title": "WETHHook._withdraw(uint256) (src/WETHHook.sol#43-50) makes a state-changing call to `weth` in the swap path (_withdraw:47), reached from beforeSwap",
+      "description": "WETHHook._withdraw(uint256) (src/WETHHook.sol#43-50) makes a state-changing call to `weth` in the swap path (_withdraw:47), reached from beforeSwap. That address is a dependency the pool did not have: a revert or a pause there reverts every swap on every pool using this hook.",
+      "severity": "medium",
+      "confidence": "medium",
+      "location": {
+        "file": "src/WETHHook.sol",
+        "line": 43,
+        "endLine": 50
+      },
+      "function": {
+        "name": "_withdraw"
+      },
+      "discriminator": "weth",
+      "evidence": [
+        "WETHHook._withdraw(uint256) (src/WETHHook.sol#43-50) makes a state-changing call to `weth` in the swap path (_withdraw:47), reached from beforeSwap. That address is a dependency the pool did not have: a revert or a pause there reverts every swap on every pool using this hook."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-external-call-in-swap-path",
+          "severity": "medium",
+          "confidence": "medium"
+        }
+      ],
+      "informsDimensions": [
+        "externalDependencies",
+        "complexity"
+      ],
+      "metrics": {
+        "destination": "weth",
+        "isStatic": false,
+        "unhandled": true
+      }
+    },
+    {
       "id": "c996854d75650abe",
       "ruleClass": "custom-accounting",
       "title": "WETHHook (src/WETHHook.sol#12-54) declares custom-accounting permissions: `beforeSwapReturnDelta` (bit 3)",
@@ -102,6 +139,7 @@
         "callbacksDeclared": 3,
         "stateWritesInCallbacks": 0,
         "externalCallsInSwapPath": 7,
+        "externalCallsInSwapPathThirdParty": 1,
         "internalFunctionsReachableFromCallbacks": 13,
         "usesReturnsDelta": true,
         "hasOwnerOnlyFunctions": false
@@ -125,8 +163,8 @@
     }
   ],
   "score": {
-    "total": 13,
-    "totalUpperBound": 25,
+    "total": 15,
+    "totalUpperBound": 21,
     "tier": "medium",
     "tierUpperBound": "high",
     "inconclusive": true,
@@ -145,7 +183,7 @@
         "bracketLabel": "Returns a delta and makes an external call in the swap path",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "hook-profile metrics: callbacksImplemented=2, callbacksDeclared=3, stateWritesInCallbacks=0, externalCallsInSwapPath=7, internalFunctionsReachableFromCallbacks=13, usesReturnsDelta=true, hasOwnerOnlyFunctions=false",
+          "hook-profile metrics: callbacksImplemented=2, callbacksDeclared=3, stateWritesInCallbacks=0, externalCallsInSwapPath=7, externalCallsInSwapPathThirdParty=1, internalFunctionsReachableFromCallbacks=13, usesReturnsDelta=true, hasOwnerOnlyFunctions=false",
           "Scored 4 by rule `usesReturnsDelta && externalCallsInSwapPath >= 1`: A hook that both alters settled amounts and leaves the swap path mid-flight has two interacting flows to reason about, not one. (hookrisk’s interpretation; the framework publishes no brackets)",
           "The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target."
         ]
@@ -166,13 +204,15 @@
       {
         "id": "externalDependencies",
         "name": "External dependencies",
-        "value": null,
+        "value": 2,
         "max": 3,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "A dependency read inside the swap path, or more than one dependency",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: no detector for external-call-in-swap-path yet."
+          "1 external-call-in-swap-path finding(s)",
+          "Scored 2 by rule `always` on weth (medium): The framework's 2 bracket verbatim: a dependency read inside the swap path. Unconditional, so a finding whose call kind the detector did not classify also scores 2 — the direction that does not understate risk. (hookrisk’s interpretation; the framework publishes no brackets)",
+          "An external call inside the swap path reopens the execution environment mid-swap."
         ]
       },
       {
@@ -224,12 +264,15 @@
       {
         "id": "autonomousParameterUpdates",
         "name": "Autonomous parameter updates",
-        "value": null,
+        "value": 0,
         "max": 3,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "All parameters set by an explicit privileged call",
         "bracketsAreInterpretation": true,
-        "evidence": []
+        "evidence": [
+          "No admin-surface findings, and every detector that could produce one ran.",
+          "Corroborated by the hook profile: no owner-only surface, and HS-03 found no unguarded mutator of callback-read state."
+        ]
       },
       {
         "id": "priceImpactingBehavior",
@@ -252,6 +295,15 @@
         "firedBy": [
           "customMath >= 3 (is 3)",
           "returns-delta-permission"
+        ],
+        "derivationIsInterpretation": true
+      },
+      {
+        "id": "external-dependencies",
+        "name": "External Protocol or Oracle Dependencies",
+        "firedBy": [
+          "externalDependencies >= 1 (is 2)",
+          "detector:external-call-in-swap-path"
         ],
         "derivationIsInterpretation": true
       },
@@ -287,6 +339,11 @@
             "from": "tier:medium",
             "strength": "required",
             "detail": "One full audit"
+          },
+          {
+            "from": "trigger:external-dependencies",
+            "strength": "required",
+            "detail": "Must review trust assumptions, failure modes and fallback logic"
           }
         ]
       },
@@ -297,6 +354,10 @@
         "sources": [
           {
             "from": "tier:medium",
+            "strength": "recommended"
+          },
+          {
+            "from": "trigger:external-dependencies",
             "strength": "recommended"
           },
           {
@@ -319,6 +380,18 @@
             "from": "trigger:price-impact",
             "strength": "required",
             "detail": "Auditor should specialize in math"
+          }
+        ]
+      },
+      {
+        "action": "scenario-testing",
+        "label": "Dependency-failure scenario testing",
+        "strength": "required",
+        "sources": [
+          {
+            "from": "trigger:external-dependencies",
+            "strength": "required",
+            "detail": "For dependency failures"
           }
         ]
       },
@@ -347,6 +420,27 @@
         ]
       },
       {
+        "action": "monitoring",
+        "label": "Continuous monitoring with anomaly detection",
+        "strength": "strongly-recommended",
+        "sources": [
+          {
+            "from": "tier:medium",
+            "strength": "recommended",
+            "detail": "If external dependencies exist"
+          },
+          {
+            "from": "trigger:custom-math",
+            "strength": "recommended"
+          },
+          {
+            "from": "trigger:external-dependencies",
+            "strength": "strongly-recommended",
+            "detail": "Dependency health"
+          }
+        ]
+      },
+      {
         "action": "extended-test-coverage",
         "label": "Extended test coverage",
         "strength": "recommended",
@@ -366,6 +460,10 @@
           {
             "from": "trigger:custom-math",
             "strength": "recommended"
+          },
+          {
+            "from": "trigger:price-impact",
+            "strength": "recommended"
           }
         ]
       },
@@ -378,22 +476,6 @@
             "from": "trigger:custom-math",
             "strength": "recommended",
             "detail": "Stateful fuzzing may significantly improve assurance"
-          }
-        ]
-      },
-      {
-        "action": "monitoring",
-        "label": "Continuous monitoring with anomaly detection",
-        "strength": "recommended",
-        "sources": [
-          {
-            "from": "tier:medium",
-            "strength": "recommended",
-            "detail": "If external dependencies exist"
-          },
-          {
-            "from": "trigger:custom-math",
-            "strength": "recommended"
           }
         ]
       },
@@ -411,10 +493,8 @@
       }
     ],
     "warnings": [
-      "4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
+      "2 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
       "trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured",
-      "trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured",
-      "trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured",
       "trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured"
     ]
   },
@@ -424,8 +504,8 @@
       "displayName": "hookrisk Slither detectors",
       "version": "0.11.6",
       "status": "ok",
-      "findingCount": 3,
-      "durationMs": 14306
+      "findingCount": 4,
+      "durationMs": 11261
     },
     {
       "engine": "harness",
@@ -435,7 +515,7 @@
       "reason": "WETHHook's constructor takes 2 argument(s) (address _manager, address _weth) and the harness can only derive the IPoolManager on its own. Add [harness] constructorArgs to hookrisk.toml with one value per argument — $poolManager, $currency0, $currency1, $owner, $hook are substituted with the harness's own addresses, anything else is passed literally to `cast abi-encode`. See HR-E305.",
       "errorCode": "HR-E305",
       "findingCount": 0,
-      "durationMs": 8
+      "durationMs": 6
     }
   ],
   "coverage": {

@@ -59,7 +59,7 @@
         "bracketLabel": null,
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: no detector for external-call-in-swap-path yet."
+          "Not measured: external-call-in-swap-path requires hookrisk, which did not run."
         ]
       },
       {
@@ -116,7 +116,9 @@
         "source": "unmeasured",
         "bracketLabel": null,
         "bracketsAreInterpretation": true,
-        "evidence": []
+        "evidence": [
+          "Not measured: admin-surface requires hookrisk, which did not run."
+        ]
       },
       {
         "id": "priceImpactingBehavior",
@@ -127,7 +129,7 @@
         "bracketLabel": null,
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: custom-accounting requires hookrisk, which did not run; no detector for unbounded-dynamic-fee yet."
+          "Not measured: custom-accounting requires hookrisk, which did not run; unbounded-dynamic-fee requires hookrisk, which did not run."
         ]
       }
     ],
@@ -212,7 +214,7 @@
       "reason": "HR-E203 Target compiles under forge but not under Slither: Error (7920): Identifier not found or not unique. --> src/RefHook.sol:144:59:",
       "errorCode": "HR-E203",
       "findingCount": 0,
-      "durationMs": 939
+      "durationMs": 715
     },
     {
       "engine": "harness",
@@ -221,7 +223,7 @@
       "status": "skipped",
       "reason": "artifact directory /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo/out does not exist (forge config: out = \"out\") — run `forge build` in /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/ref-fee-hook/repo first.",
       "findingCount": 0,
-      "durationMs": 7
+      "durationMs": 6
     }
   ],
   "coverage": {

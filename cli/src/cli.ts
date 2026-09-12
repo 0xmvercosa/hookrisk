@@ -385,17 +385,6 @@ async function commandScan(argv: string[]): Promise<number> {
 
   const { findings, stats } = mergeEngineResults(engineResults, log.stage('reconcile'));
 
-  // --- score ---
-  const rubric = loadRubric(home.rubric);
-  const scoringInput = deriveScoringInput({
-    findings,
-    engineResults,
-    declared: config.declared,
-    dimensionIds: rubric.dimensions.map((d) => d.id),
-    contractName,
-  });
-  const scored = score(scoringInput, rubric);
-
   // --- invariants ---
   const outcome = (settled[engines.length] as PromiseFulfilledResult<HarnessOutcome | null>).value;
   let invariants: InvariantResult[] = [];
@@ -461,6 +450,7 @@ async function commandScan(argv: string[]): Promise<number> {
         dynamicFee: outcome.run.dynamicFee,
         seeded: outcome.run.seeded,
         ...(outcome.run.hookedSeedRevert ? { hookedSeedRevert: outcome.run.hookedSeedRevert } : {}),
+        ...(outcome.run.probes ? { probes: outcome.run.probes } : {}),
       };
     }
   }
@@ -473,10 +463,27 @@ async function commandScan(argv: string[]): Promise<number> {
   const reconciled = reconcileLayers({
     findings,
     invariants,
+    sourceFile,
     ...(outcome?.run ? { runRecord: outcome.run } : {}),
     ...(outcome?.observations ? { observations: outcome.observations } : {}),
   });
   for (const note of reconciled.notes) log.event('info', 'reconcile', note);
+
+  // --- score ---
+  // After reconciliation on purpose: the harness's probes add findings
+  // (an unguarded callback seen by execution, a selector mismatch) that the
+  // rubric must see, and the harness summary tells the scorer whether the
+  // dynamic layer looked at all.
+  const rubric = loadRubric(home.rubric);
+  const scoringInput = deriveScoringInput({
+    findings: reconciled.findings,
+    engineResults,
+    declared: config.declared,
+    dimensionIds: rubric.dimensions.map((d) => d.id),
+    contractName,
+    harness: { status: harness.status, ...(harness.reason ? { reason: harness.reason } : {}) },
+  });
+  const scored = score(scoringInput, rubric);
 
   // --- manifest ---
   const manifest = buildManifest({

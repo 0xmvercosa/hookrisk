@@ -77,6 +77,7 @@
         "callbacksDeclared": 2,
         "stateWritesInCallbacks": 0,
         "externalCallsInSwapPath": 2,
+        "externalCallsInSwapPathThirdParty": 0,
         "internalFunctionsReachableFromCallbacks": 3,
         "usesReturnsDelta": true,
         "hasOwnerOnlyFunctions": false
@@ -137,7 +138,7 @@
   ],
   "score": {
     "total": 13,
-    "totalUpperBound": 25,
+    "totalUpperBound": 19,
     "tier": "medium",
     "tierUpperBound": "high",
     "inconclusive": true,
@@ -156,7 +157,7 @@
         "bracketLabel": "Returns a delta and makes an external call in the swap path",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "hook-profile metrics: callbacksImplemented=1, callbacksDeclared=2, stateWritesInCallbacks=0, externalCallsInSwapPath=2, internalFunctionsReachableFromCallbacks=3, usesReturnsDelta=true, hasOwnerOnlyFunctions=false",
+          "hook-profile metrics: callbacksImplemented=1, callbacksDeclared=2, stateWritesInCallbacks=0, externalCallsInSwapPath=2, externalCallsInSwapPathThirdParty=0, internalFunctionsReachableFromCallbacks=3, usesReturnsDelta=true, hasOwnerOnlyFunctions=false",
           "Scored 4 by rule `usesReturnsDelta && externalCallsInSwapPath >= 1`: A hook that both alters settled amounts and leaves the swap path mid-flight has two interacting flows to reason about, not one. (hookrisk’s interpretation; the framework publishes no brackets)",
           "The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target."
         ]
@@ -177,13 +178,14 @@
       {
         "id": "externalDependencies",
         "name": "External dependencies",
-        "value": null,
+        "value": 0,
         "max": 3,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "None; the hook touches only the PoolManager and the pair's tokens",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: no detector for external-call-in-swap-path yet."
+          "No external-call-in-swap-path findings, and every detector that could produce one ran.",
+          "Corroborated by the hook profile: zero third-party calls in the swap path."
         ]
       },
       {
@@ -235,12 +237,15 @@
       {
         "id": "autonomousParameterUpdates",
         "name": "Autonomous parameter updates",
-        "value": null,
+        "value": 0,
         "max": 3,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "All parameters set by an explicit privileged call",
         "bracketsAreInterpretation": true,
-        "evidence": []
+        "evidence": [
+          "No admin-surface findings, and every detector that could produce one ran.",
+          "Corroborated by the hook profile: no owner-only surface, and HS-03 found no unguarded mutator of callback-read state."
+        ]
       },
       {
         "id": "priceImpactingBehavior",
@@ -422,10 +427,8 @@
       }
     ],
     "warnings": [
-      "4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
+      "2 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
       "trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured",
-      "trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured",
-      "trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured",
       "trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured"
     ]
   },
@@ -436,7 +439,7 @@
       "version": "0.11.6",
       "status": "ok",
       "findingCount": 3,
-      "durationMs": 1663
+      "durationMs": 1168
     },
     {
       "engine": "harness",
@@ -444,7 +447,7 @@
       "version": "1.7.1",
       "status": "ok",
       "findingCount": 0,
-      "durationMs": 5905
+      "durationMs": 3906
     }
   ],
   "coverage": {
@@ -507,7 +510,23 @@
       "customCurve": true,
       "dynamicFee": false,
       "seeded": "hooked-failed",
-      "hookedSeedRevert": "0x08c379a0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000174e6f207634204c697175696469747920616c6c6f776564000000000000000000"
+      "hookedSeedRevert": "0x08c379a0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000174e6f207634204c697175696469747920616c6c6f776564000000000000000000",
+      "probes": {
+        "eoaGuard": {
+          "beforeAddLiquidity": "guarded",
+          "beforeSwap": "guarded"
+        },
+        "exclusivity": "not-applicable",
+        "selectors": {
+          "beforeAddLiquidity": "reverted",
+          "beforeSwap": "reverted"
+        },
+        "exclusivityReason": "every swap or liquidity callback reverts on the hook's own pool, so a revert on a foreign key would prove nothing",
+        "selectorReverts": {
+          "beforeAddLiquidity": "0x08c379a0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000174e6f207634204c697175696469747920616c6c6f776564000000000000000000",
+          "beforeSwap": "0x4e487b710000000000000000000000000000000000000000000000000000000000000011"
+        }
+      }
     }
   },
   "invariants": [

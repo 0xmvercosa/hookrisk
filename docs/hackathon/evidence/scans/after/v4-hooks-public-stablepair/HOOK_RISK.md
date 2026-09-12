@@ -8,16 +8,16 @@ Executable assessment against the [Uniswap Hooks Security Framework](https://git
 | --- | --- |
 | Contract | `StablePairHook` in `src/stable/StablePairHook.sol` |
 | Compiler | solc 0.8.26 |
-| Risk tier | **LOW** 5/33, undetermined up to HIGH 25/33 |
+| Risk tier | **LOW** 6/33, undetermined up to MEDIUM 17/33 |
 | Gate | ❌ Failed (2 reasons below) |
-| Findings | 1 high · 1 classification |
-| Dimensions | 1 measured · 2 declared · 6 unmeasured |
+| Findings | 1 high, 1 medium · 1 classification |
+| Dimensions | 4 measured · 2 declared · 3 unmeasured |
 | Static analysis | ok |
 | Differential harness | failed (HR-E304) |
 | Invariants | ⚠️ I1 inconclusive · ⚠️ I2 inconclusive · ⚠️ I3 inconclusive |
 | Tool | hookrisk 0.1.0, rubric e7e8da52fd5717b6eb4517ea779b766f63148c41 |
 
-> **The tier is a range.** 5/33 is the sum of what could be measured or was declared; 6 dimensions have no detector or declaration. At their maximum the hook would score 25/33 (high). Declare them in `hookrisk.toml` to close the range.
+> **The tier is a range.** 6/33 is the sum of what could be measured or was declared; 3 dimensions have no detector or declaration. At their maximum the hook would score 17/33 (medium). Declare them in `hookrisk.toml` to close the range.
 
 ### Why the gate failed
 
@@ -29,6 +29,7 @@ Executable assessment against the [Uniswap Hooks Security Framework](https://git
 | # | Severity | Rule | Finding | Location | Confidence | Engines |
 | --- | --- | --- | --- | --- | --- | --- |
 | F1 | 🟠 High | HS-02 `flag-implementation-divergence` | `afterInitialize` is declared but has no working implementation | `src/stable/StablePairHook.sol:25` | medium | hookrisk |
+| F2 | 🟡 Medium | HS-03 `admin-surface` | `initializePool` changes hook state and is callable outside a swap | `src/stable/StablePairHook.sol:34` | medium | hookrisk |
 
 ### F1 · 🟠 High · `afterInitialize` is declared but has no working implementation
 
@@ -37,6 +38,14 @@ HS-02 `flag-implementation-divergence` · `src/stable/StablePairHook.sol:25` · 
 StablePairHook (src/stable/StablePairHook.sol#25-259) declares permission `afterInitialize` (bit 12, AFTER_INITIALIZE_FLAG) but provides no working `afterInitialize` implementation. The PoolManager will call it on every matching pool operation and the call will revert, making the pool unusable for that operation.
 
 Reported by `hookrisk/hookrisk-flag-divergence`.
+
+### F2 · 🟡 Medium · `initializePool` changes hook state and is callable outside a swap
+
+HS-03 `admin-surface` · `src/stable/StablePairHook.sol:34` · confidence **medium**
+
+StablePairHook.initializePool(PoolKey,uint160,StableFeeConfig) (src/stable/StablePairHook.sol#34-48) (initializePool) is restricted to a privileged caller and writes `STABLE_FEE_CONFIGURATION_STORAGE_LOCATION` which the callbacks read. That key can change the swap's economics after deployment: the framework's autonomous-parameter-updates concern.
+
+Reported by `hookrisk/hookrisk-admin-surface`.
 
 ## Classifications
 
@@ -56,9 +65,10 @@ The static engine’s structural measurement of the contract. Complexity is deri
 | Callbacks declared | 6 |
 | State writes in callbacks | 1 |
 | External calls in the swap path | 0 |
+| externalCallsInSwapPathThirdParty | 0 |
 | Internal functions reachable from callbacks | 9 |
 | Returns a delta | false |
-| Owner-only surface | false |
+| Owner-only surface | true |
 | Permissions declared | `beforeInitialize`, `afterInitialize`, `beforeAddLiquidity`, `afterAddLiquidity`, `beforeSwap`, `afterSwap` |
 
 ## Score
@@ -67,37 +77,51 @@ The static engine’s structural measurement of the contract. Complexity is deri
 | --- | --- | --- | --- |
 | Complexity | 2/5 | measured | Callbacks write hook state, or 3+ callbacks ᵃ |
 | Custom math | — | unmeasured | _unmeasured_ ᵃ |
-| External dependencies | — | unmeasured | _unmeasured_ ᵃ |
+| External dependencies | 0/3 | measured | None; the hook touches only the PoolManager and the pair's tokens ᵃ |
 | External liquidity exposure | — | unmeasured | _unmeasured_ ᵃ |
 | TVL potential | 0/5 | declared | Under $100K (experimental or personal project) |
 | Team maturity | 3/3 | declared | Unproven: no prior production deployments, or deployments lacking audits and operational rigor; new, anonymous, or no public track record |
 | Upgradeability | — | unmeasured | _unmeasured_ ᵃ |
-| Autonomous parameter updates | — | unmeasured | _unmeasured_ ᵃ |
-| Price impacting behavior | — | unmeasured | _unmeasured_ ᵃ |
+| Autonomous parameter updates | 1/3 | measured | Self-adjusting within hard-coded bounds and a rate limit ᵃ |
+| Price impacting behavior | 0/3 | measured | Observes swaps; does not alter price, fee or delta ᵃ |
 
 ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
 
 <details><summary>Evidence per dimension</summary>
 
 - **Complexity**
-  - hook-profile metrics: callbacksImplemented=4, callbacksDeclared=6, stateWritesInCallbacks=1, externalCallsInSwapPath=0, internalFunctionsReachableFromCallbacks=9, usesReturnsDelta=false, hasOwnerOnlyFunctions=false
+  - hook-profile metrics: callbacksImplemented=4, callbacksDeclared=6, stateWritesInCallbacks=1, externalCallsInSwapPath=0, externalCallsInSwapPathThirdParty=0, internalFunctionsReachableFromCallbacks=9, usesReturnsDelta=false, hasOwnerOnlyFunctions=true
   - Scored 2 by rule `stateWritesInCallbacks >= 1 || callbacksImplemented >= 3`: Hook state written in callbacks is the 'branching logic' the prose names first; three or more callbacks is its 'number of callbacks'. (hookrisk’s interpretation; the framework publishes no brackets)
   - 1 flag-implementation-divergence finding(s)
   - The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target.
 - **Custom math**
   - Not measured: no detector for rounding-direction yet.
 - **External dependencies**
-  - Not measured: no detector for external-call-in-swap-path yet.
+  - No external-call-in-swap-path findings, and every detector that could produce one ran.
+  - Corroborated by the hook profile: zero third-party calls in the swap path.
 - **TVL potential**
   - Declared in hookrisk.toml. hookrisk does not measure tvlPotential.
 - **Team maturity**
   - Declared in hookrisk.toml. hookrisk does not measure teamMaturity.
 - **Upgradeability**
   - Not measured: no detector for upgradeable-hook (needs blocksec, which did not run); selfdestruct requires blocksec, which did not run.
+- **Autonomous parameter updates**
+  - 1 admin-surface finding(s)
+  - Scored 1 by rule `severityRank >= 2` on initializePool (medium): HS-03 at MEDIUM is an owner-only mutator (hook-profile.hasOwnerOnlyFunctions). The framework's 0 bracket describes exactly this shape, but scoring 0 would rank a hook whose owner can move the fee level with a hook that has no parameters at all, and source analysis cannot see the owner's guardrails — timelock, ceiling, multisig. 1 records the surface as a floor without asserting autonomy; a team that has a timelock should declare 0 in hookrisk.toml. (hookrisk’s interpretation; the framework publishes no brackets)
+  - HS-03 found a state-changing external function on the hook. The framework grades this dimension by the guardrails on a parameter change (bounds, rate limit, gating); an admin surface is where those guardrails would have to live.
 - **Price impacting behavior**
-  - Not measured: no detector for unbounded-dynamic-fee yet.
+  - No custom-accounting or unbounded-dynamic-fee findings, and every detector that could produce one ran.
+  - Corroborated by the hook profile: no returns-delta permission, and HS-06 found no unbounded dynamic fee.
 
 </details>
+
+### Feature triggers
+
+These apply regardless of the total: the framework’s own safeguard against a team scoring itself low while shipping a dangerous primitive.
+
+| Trigger | Fired by | Derivation |
+| --- | --- | --- |
+| Autonomous Parameter Updates or Self-Tuning Hook | `autonomousParameterUpdates >= 1 (is 1)` | hookrisk’s reading |
 
 ## Security plan
 
@@ -106,10 +130,13 @@ The strongest requirement across the tier baseline and every fired trigger, with
 | Action | Strength | Because |
 | --- | --- | --- |
 | Security audit | **Required** | `tier:low` |
+| Invariant and stateful fuzz testing | **Required** | `trigger:autonomous` |
+| Documented debugging and recovery procedures | **Required** | `trigger:autonomous` |
 | Automated static analysis | **Required** | `tier:low` |
+| Minimise or timelock upgradeability | **Required** | `trigger:autonomous` |
+| Continuous monitoring with anomaly detection | Strongly recommended | `tier:low`, `trigger:autonomous` |
 | Bug bounty programme | Optional | `tier:low` |
 | Audit by a math and invariants specialist | Optional | `tier:low` |
-| Continuous monitoring with anomaly detection | Optional | `tier:low` |
 
 ## Dynamic analysis
 
@@ -125,7 +152,7 @@ Differential twin-pool harness: **failed** (HR-E304). harness setUp failed: Twin
 
 | Engine | Status | Findings | Notes |
 | --- | --- | --- | --- |
-| hookrisk Slither detectors | ok | 3 |  |
+| hookrisk Slither detectors | ok | 4 |  |
 | Differential harness (Foundry) | failed (HR-E304) | 0 | harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304). |
 
 > ⚠️ **26 function(s) in the compilation unit were not analysed.** Slither could not lift them to IR and continued silently. Findings above do not cover them; that is not the same as those functions being clean. See `HR-E205`.
@@ -159,12 +186,9 @@ Differential twin-pool harness: **failed** (HR-E304). harness setUp failed: Twin
 
 ## Warnings
 
-- 6 dimension(s) unmeasured: the tier is between Low Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
+- 3 dimension(s) unmeasured: the tier is between Low Risk and Medium Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
 - trigger 'custom-math' could not be evaluated: dimension 'customMath' is unmeasured
 - trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured
-- trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured
-- trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured
-- trigger 'price-impact' could not be evaluated: dimension 'priceImpactingBehavior' is unmeasured
 - trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured
 
 ---

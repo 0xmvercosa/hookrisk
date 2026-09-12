@@ -207,6 +207,14 @@
                       "reverted"
                     ]
                   }
+                },
+                "selectorReverts": {
+                  "type": "object",
+                  "description": "Per callback whose selector probe verdict is `reverted`, the raw revert data the call returned (hex), so a reader can decode why.",
+                  "additionalProperties": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]*$"
+                  }
                 }
               }
             }
@@ -981,8 +989,10 @@
           "additionalProperties": {
             "type": [
               "integer",
-              "boolean"
-            ]
+              "boolean",
+              "string"
+            ],
+            "description": "Numbers and booleans for profile metrics; HS-05 carries the call destination as a string."
           }
         },
         "callbacks": {

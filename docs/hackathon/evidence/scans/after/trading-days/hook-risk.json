@@ -84,7 +84,7 @@
         "bracketLabel": null,
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: no detector for external-call-in-swap-path yet."
+          "Not measured: external-call-in-swap-path requires hookrisk; hookrisk ran but did not analyse the target (TradingDaysHook uses a hook ABI hookrisk cannot analyse: TradingDaysHook (src/TradingDaysHook.sol#16-79) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 …)."
         ]
       },
       {
@@ -141,7 +141,9 @@
         "source": "unmeasured",
         "bracketLabel": null,
         "bracketsAreInterpretation": true,
-        "evidence": []
+        "evidence": [
+          "Not measured: admin-surface requires hookrisk; hookrisk ran but did not analyse the target (TradingDaysHook uses a hook ABI hookrisk cannot analyse: TradingDaysHook (src/TradingDaysHook.sol#16-79) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 …)."
+        ]
       },
       {
         "id": "priceImpactingBehavior",
@@ -152,7 +154,7 @@
         "bracketLabel": null,
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: custom-accounting requires hookrisk; hookrisk ran but did not analyse the target (TradingDaysHook uses a hook ABI hookrisk cannot analyse: TradingDaysHook (src/TradingDaysHook.sol#16-79) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 …); no detector for unbounded-dynamic-fee yet."
+          "Not measured: custom-accounting requires hookrisk; hookrisk ran but did not analyse the target (TradingDaysHook uses a hook ABI hookrisk cannot analyse: TradingDaysHook (src/TradingDaysHook.sol#16-79) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 …); unbounded-dynamic-fee requires hookrisk; hookrisk ran but did not analyse the target (TradingDaysHook uses a hook ABI hookrisk cannot analyse: TradingDaysHook (src/TradingDaysHook.sol#16-79) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 …)."
         ]
       }
     ],
@@ -235,7 +237,7 @@
       "version": "0.11.6",
       "status": "ok",
       "findingCount": 1,
-      "durationMs": 3567
+      "durationMs": 3070
     },
     {
       "engine": "harness",

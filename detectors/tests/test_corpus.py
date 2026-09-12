@@ -390,6 +390,7 @@ class HookProfile(unittest.TestCase):
         "OpenAdminHook",
         "OwnableAdminHook",
         "HandRolledAdminHook",
+        "UserLiquidityHook",
         "RoleAdminHook",
         "UnboundedOverrideFeeHook",
         "OwnerSetFeeHook",
@@ -564,6 +565,15 @@ class BadCorpus(unittest.TestCase):
 
     # --- HS-03 ---------------------------------------------------------------
 
+    def test_hs03_user_facing_liquidity_path_is_low(self) -> None:
+        """A caller-funded deposit or an own-position withdraw is a user surface, not an admin one."""
+        hits = [
+            f for f in by_check(scan("src/bad"), "hookrisk-admin-surface") if "UserLiquidityHook" in f["description"]
+        ]
+        self.assertEqual(sorted(f["hookrisk"]["discriminator"] for f in hits), ["deposit", "withdraw"])
+        for f in hits:
+            self.assertEqual(f["impact"], "Low", f["description"])
+
     def test_hs03_unguarded_mutator_is_high_and_owner_only_is_medium(self) -> None:
         hits = {
             (anchor(f), f["hookrisk"]["discriminator"]): f["impact"]
@@ -581,6 +591,10 @@ class BadCorpus(unittest.TestCase):
                 ("RoleAdminHook.setFee", "setFee"): "Medium",
                 ("OwnerSetFeeHook.setFee", "setFee"): "Medium",
                 ("BoundedOwnerFeeHook.setFee", "setFee"): "Medium",
+                # The caller funds or draws on their own position: a user
+                # surface, listed at Low because it still moves callback-read state.
+                ("UserLiquidityHook.deposit", "deposit"): "Low",
+                ("UserLiquidityHook.withdraw", "withdraw"): "Low",
             },
             hits,
         )
@@ -597,6 +611,8 @@ class BadCorpus(unittest.TestCase):
             self.assertRegex(finding["description"], r"writes `(feeBips|fee|_fee)` which the callbacks read")
             if finding["impact"] == "High":
                 self.assertIn("callable by anyone", finding["description"])
+            elif finding["impact"] == "Low":
+                self.assertIn("user-facing function", finding["description"])
             else:
                 self.assertIn("restricted to a privileged caller", finding["description"])
                 self.assertIn("autonomous-parameter-updates", finding["description"])

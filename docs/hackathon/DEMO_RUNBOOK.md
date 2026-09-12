@@ -118,7 +118,7 @@ jq -r '.findings[]|"\(.severity)\t\(.ruleClass)\t\(.discriminator // "-")\tline 
 ```
 ```
 MEDIUM risk  14/33  (undetermined: up to 26/33)
-  findings    3 high, 2 info (+ hook profile)
+  findings    3 high, 5 medium, 2 info (+ hook profile)
   ✓ hookrisk   ok
   - harness    skipped  CorkHook's constructor takes 3 argument(s) (address
                _poolManager, address _lpBase, address owner) and the harness can
@@ -146,6 +146,13 @@ The HS-02 divergence on `beforeRemoveLiquidity` is a *genuine* stub — declared
 `callback-intentionally-disabled`, INFO: it reverts
 `DisableNativeLiquidityModification()` by design, and used to be a false HIGH.
 And the harness skip names the exact constructor it cannot satisfy.
+
+**Also on Cork since the research pass.** Two `admin-surface` MEDIUMs (HS-03: the
+owner can rewrite the base fee and the treasury split that every swap pays) and
+three `external-call-in-swap-path` MEDIUMs (HS-05: the forwarder, the swapper's
+flash-swap callback and a config read, each a dependency every swap must survive).
+Complexity 5/5, autonomous-parameter-updates and external-dependencies are now
+*measured*, so the tier band narrowed from 14–26 to 17–23.
 
 ## Step 4 — A custom curve the old harness silently passed · 5 s, exit 0
 

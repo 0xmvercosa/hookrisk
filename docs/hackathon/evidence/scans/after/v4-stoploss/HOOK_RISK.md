@@ -59,15 +59,17 @@ Properties of the hook that change how it is scored or tested. They are informat
 - **Custom math**
   - Not measured: custom-accounting requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …); no detector for rounding-direction yet.
 - **External dependencies**
-  - Not measured: no detector for external-call-in-swap-path yet.
+  - Not measured: external-call-in-swap-path requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …).
 - **TVL potential**
   - Declared in hookrisk.toml. hookrisk does not measure tvlPotential.
 - **Team maturity**
   - Declared in hookrisk.toml. hookrisk does not measure teamMaturity.
 - **Upgradeability**
   - Not measured: no detector for upgradeable-hook (needs blocksec, which did not run); selfdestruct requires blocksec, which did not run.
+- **Autonomous parameter updates**
+  - Not measured: admin-surface requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …).
 - **Price impacting behavior**
-  - Not measured: custom-accounting requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …); no detector for unbounded-dynamic-fee yet.
+  - Not measured: custom-accounting requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …); unbounded-dynamic-fee requires hookrisk; hookrisk ran but did not analyse the target (StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); …).
 
 </details>
 

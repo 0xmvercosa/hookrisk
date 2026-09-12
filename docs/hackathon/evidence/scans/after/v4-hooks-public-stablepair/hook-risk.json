@@ -43,6 +43,38 @@
       ]
     },
     {
+      "id": "b1d13a56fdd11dfb",
+      "ruleClass": "admin-surface",
+      "title": "StablePairHook.initializePool(PoolKey,uint160,StableFeeConfig) (src/stable/StablePairHook.sol#34-48) (initializePool) is restricted to a privileged caller …",
+      "description": "StablePairHook.initializePool(PoolKey,uint160,StableFeeConfig) (src/stable/StablePairHook.sol#34-48) (initializePool) is restricted to a privileged caller and writes `STABLE_FEE_CONFIGURATION_STORAGE_LOCATION` which the callbacks read. That key can change the swap's economics after deployment: the framework's autonomous-parameter-updates concern.",
+      "severity": "medium",
+      "confidence": "medium",
+      "location": {
+        "file": "src/stable/StablePairHook.sol",
+        "line": 34,
+        "endLine": 48
+      },
+      "function": {
+        "name": "initializePool"
+      },
+      "discriminator": "initializePool",
+      "evidence": [
+        "StablePairHook.initializePool(PoolKey,uint160,StableFeeConfig) (src/stable/StablePairHook.sol#34-48) (initializePool) is restricted to a privileged caller and writes `STABLE_FEE_CONFIGURATION_STORAGE_LOCATION` which the callbacks read. That key can change the swap's economics after deployment: the framework's autonomous-parameter-updates concern."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-admin-surface",
+          "severity": "medium",
+          "confidence": "medium"
+        }
+      ],
+      "informsDimensions": [
+        "autonomousParameterUpdates",
+        "complexity"
+      ]
+    },
+    {
       "id": "0acb440f46048450",
       "ruleClass": "callback-intentionally-disabled",
       "title": "StablePairHook (src/stable/StablePairHook.sol#25-259) overrides `beforeInitialize` (inherited from BaseDynamicFeeHook._beforeInitialize) with `revert …",
@@ -98,9 +130,10 @@
         "callbacksDeclared": 6,
         "stateWritesInCallbacks": 1,
         "externalCallsInSwapPath": 0,
+        "externalCallsInSwapPathThirdParty": 0,
         "internalFunctionsReachableFromCallbacks": 9,
         "usesReturnsDelta": false,
-        "hasOwnerOnlyFunctions": false
+        "hasOwnerOnlyFunctions": true
       },
       "permissions": {
         "beforeInitialize": true,
@@ -121,10 +154,10 @@
     }
   ],
   "score": {
-    "total": 5,
-    "totalUpperBound": 25,
+    "total": 6,
+    "totalUpperBound": 17,
     "tier": "low",
-    "tierUpperBound": "high",
+    "tierUpperBound": "medium",
     "inconclusive": true,
     "rubric": {
       "framework": "Uniswap Hooks Security Framework",
@@ -141,7 +174,7 @@
         "bracketLabel": "Callbacks write hook state, or 3+ callbacks",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "hook-profile metrics: callbacksImplemented=4, callbacksDeclared=6, stateWritesInCallbacks=1, externalCallsInSwapPath=0, internalFunctionsReachableFromCallbacks=9, usesReturnsDelta=false, hasOwnerOnlyFunctions=false",
+          "hook-profile metrics: callbacksImplemented=4, callbacksDeclared=6, stateWritesInCallbacks=1, externalCallsInSwapPath=0, externalCallsInSwapPathThirdParty=0, internalFunctionsReachableFromCallbacks=9, usesReturnsDelta=false, hasOwnerOnlyFunctions=true",
           "Scored 2 by rule `stateWritesInCallbacks >= 1 || callbacksImplemented >= 3`: Hook state written in callbacks is the 'branching logic' the prose names first; three or more callbacks is its 'number of callbacks'. (hookrisk’s interpretation; the framework publishes no brackets)",
           "1 flag-implementation-divergence finding(s)",
           "The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target."
@@ -162,13 +195,14 @@
       {
         "id": "externalDependencies",
         "name": "External dependencies",
-        "value": null,
+        "value": 0,
         "max": 3,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "None; the hook touches only the PoolManager and the pair's tokens",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: no detector for external-call-in-swap-path yet."
+          "No external-call-in-swap-path findings, and every detector that could produce one ran.",
+          "Corroborated by the hook profile: zero third-party calls in the swap path."
         ]
       },
       {
@@ -220,27 +254,41 @@
       {
         "id": "autonomousParameterUpdates",
         "name": "Autonomous parameter updates",
-        "value": null,
+        "value": 1,
         "max": 3,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "Self-adjusting within hard-coded bounds and a rate limit",
         "bracketsAreInterpretation": true,
-        "evidence": []
+        "evidence": [
+          "1 admin-surface finding(s)",
+          "Scored 1 by rule `severityRank >= 2` on initializePool (medium): HS-03 at MEDIUM is an owner-only mutator (hook-profile.hasOwnerOnlyFunctions). The framework's 0 bracket describes exactly this shape, but scoring 0 would rank a hook whose owner can move the fee level with a hook that has no parameters at all, and source analysis cannot see the owner's guardrails — timelock, ceiling, multisig. 1 records the surface as a floor without asserting autonomy; a team that has a timelock should declare 0 in hookrisk.toml. (hookrisk’s interpretation; the framework publishes no brackets)",
+          "HS-03 found a state-changing external function on the hook. The framework grades this dimension by the guardrails on a parameter change (bounds, rate limit, gating); an admin surface is where those guardrails would have to live."
+        ]
       },
       {
         "id": "priceImpactingBehavior",
         "name": "Price impacting behavior",
-        "value": null,
+        "value": 0,
         "max": 3,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "Observes swaps; does not alter price, fee or delta",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: no detector for unbounded-dynamic-fee yet."
+          "No custom-accounting or unbounded-dynamic-fee findings, and every detector that could produce one ran.",
+          "Corroborated by the hook profile: no returns-delta permission, and HS-06 found no unbounded dynamic fee."
         ]
       }
     ],
-    "triggers": [],
+    "triggers": [
+      {
+        "id": "autonomous",
+        "name": "Autonomous Parameter Updates or Self-Tuning Hook",
+        "firedBy": [
+          "autonomousParameterUpdates >= 1 (is 1)"
+        ],
+        "derivationIsInterpretation": true
+      }
+    ],
     "recommendations": [
       {
         "action": "audit",
@@ -255,6 +303,30 @@
         ]
       },
       {
+        "action": "invariant-testing",
+        "label": "Invariant and stateful fuzz testing",
+        "strength": "required",
+        "sources": [
+          {
+            "from": "trigger:autonomous",
+            "strength": "required",
+            "detail": "For state transitions"
+          }
+        ]
+      },
+      {
+        "action": "recovery-procedures",
+        "label": "Documented debugging and recovery procedures",
+        "strength": "required",
+        "sources": [
+          {
+            "from": "trigger:autonomous",
+            "strength": "required",
+            "detail": "Debugging and recovery procedures must be documented"
+          }
+        ]
+      },
+      {
         "action": "static-analysis",
         "label": "Automated static analysis",
         "strength": "required",
@@ -263,6 +335,34 @@
             "from": "tier:low",
             "strength": "required",
             "detail": "AI static analysis tools"
+          }
+        ]
+      },
+      {
+        "action": "timelock-or-minimise-upgradeability",
+        "label": "Minimise or timelock upgradeability",
+        "strength": "required",
+        "sources": [
+          {
+            "from": "trigger:autonomous",
+            "strength": "required",
+            "detail": "Upgradeability must be minimized or time-locked"
+          }
+        ]
+      },
+      {
+        "action": "monitoring",
+        "label": "Continuous monitoring with anomaly detection",
+        "strength": "strongly-recommended",
+        "sources": [
+          {
+            "from": "tier:low",
+            "strength": "optional",
+            "detail": "Unless TVL grows significantly"
+          },
+          {
+            "from": "trigger:autonomous",
+            "strength": "strongly-recommended"
           }
         ]
       },
@@ -288,27 +388,12 @@
             "detail": "No math specialist required"
           }
         ]
-      },
-      {
-        "action": "monitoring",
-        "label": "Continuous monitoring with anomaly detection",
-        "strength": "optional",
-        "sources": [
-          {
-            "from": "tier:low",
-            "strength": "optional",
-            "detail": "Unless TVL grows significantly"
-          }
-        ]
       }
     ],
     "warnings": [
-      "6 dimension(s) unmeasured: the tier is between Low Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
+      "3 dimension(s) unmeasured: the tier is between Low Risk and Medium Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
       "trigger 'custom-math' could not be evaluated: dimension 'customMath' is unmeasured",
       "trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured",
-      "trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured",
-      "trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured",
-      "trigger 'price-impact' could not be evaluated: dimension 'priceImpactingBehavior' is unmeasured",
       "trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured"
     ]
   },
@@ -318,8 +403,8 @@
       "displayName": "hookrisk Slither detectors",
       "version": "0.11.6",
       "status": "ok",
-      "findingCount": 3,
-      "durationMs": 13576
+      "findingCount": 4,
+      "durationMs": 11693
     },
     {
       "engine": "harness",
@@ -329,7 +414,7 @@
       "reason": "harness setUp failed: TwinPools: hooked pool would not initialise. With fee 3000: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496; with a dynamic fee: 0x1210aa130000000000000000000000007fa9385be102ac3eac297483dd6233d62b3e1496. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).",
       "errorCode": "HR-E304",
       "findingCount": 0,
-      "durationMs": 221
+      "durationMs": 190
     }
   ],
   "coverage": {

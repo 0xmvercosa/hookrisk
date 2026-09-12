@@ -68,8 +68,8 @@ Full table with per-hook links: `evidence/scans/README.md`.
 
 ## What changed today
 
-Two passes of parallel workstreams with disjoint file ownership. Final state:
-274 CLI tests, 41 harness tests, three corpus gates and 29 detector tests
+Four passes of parallel workstreams with disjoint file ownership. Final state:
+320 CLI tests, 60 harness tests, three corpus gates and 36 detector tests
 green.
 
 ### Pass 1: make it honest, widen reach
@@ -165,6 +165,43 @@ curve; an engine failure or an unrecognised target fails the gate by default;
 the report's counts, wording, links and titles were corrected. What remains is
 listed in `RESUME.md`.
 
+### Pass 4: what the research produced
+
+Two read-only research notes (`research/hacken.md`, `research/hookguard.md`)
+mapped Hacken's "Auditing Uniswap V4 Hooks" guide and checker and
+chaosxcode/hookguard against hookrisk. Nothing was worth porting as code;
+three classes hookrisk was blind to were worth re-implementing at its fidelity,
+plus the detectors already on the roadmap:
+
+- **HS-03 admin surface**: an external function that writes state the
+  callbacks read. Unguarded is HIGH, owner- or role-gated is MEDIUM (the
+  framework's autonomous-parameter-updates concern), and a caller-funded or
+  own-position liquidity path is LOW because it is permissionless by design.
+  Access control is recognised structurally, including OpenZeppelin
+  AccessControl.
+- **HS-05 third-party calls in the swap path**: one finding per destination
+  that is neither the PoolManager nor a pool currency, flagged static or
+  unhandled; the profile counts them separately from settlement calls.
+- **HS-06 unbounded dynamic fee**: the fee passed to `updateDynamicLPFee` or
+  returned as an override, traced to its sources, with no ceiling anywhere.
+- **HS-02's third case**: a returns-delta flag declared while the callback
+  returns a zero delta on every path.
+- **Three execution probes in the harness**, run before the fuzz campaign:
+  every implemented callback called from a non-PoolManager address (an
+  `unguarded` verdict corroborates HS-01 by execution), called as the
+  PoolManager to check the selector it returns, and called with a foreign
+  pool key (`unvalidated-pool-key` classification when accepted).
+- **Silence corroborated by measurement scores zero.** Price impact,
+  autonomous parameter updates and external dependencies are measured 0 when
+  their detector was silent and the hook profile confirms the absence.
+
+On the 15 hooks: the official template's tier band narrowed from 5–25 to
+5–16 and Cork's to 17–23 with five of nine dimensions measured; on every
+analysed hook only external liquidity exposure and upgradeability remain
+unmeasured. Cork gained two owner-only fee mutators and three swap-path
+dependencies; all probes on the template and OpenZeppelin hooks read guarded
+with correct selectors.
+
 ## Demo script
 
 ```bash
@@ -190,14 +227,15 @@ cd harness && forge test --match-path test/HarnessValidation.t.sol
 
 ## Honest limits, still open
 
-- **Five of nine rubric dimensions have no detector**, so the tier is still a
-  range on most hooks. Complexity is now measured from the hook profile
-  (callbacks, state writes, swap-path external calls, returns-delta, admin
-  surface), and the default gate no longer fails on an undetermined tier
-  unless `failOnInconclusive = true`. Next detectors, with fixtures already
-  identified in the scan corpus: HS-05 external-call-in-swap-path (helpers
-  exist), HS-04 upgradeability (StablePairHook is UUPS), HS-03 admin surface
-  (the profile already flags owner-only functions).
+- **Two rubric dimensions still have no detector**: external liquidity
+  exposure (does the hook custody funds across transactions) and
+  upgradeability (proxies, DELEGATECALL to mutable code; BlockSec covers it
+  when enabled, and hookguard's bytecode-layer idea in `RESUME.md` is the
+  Docker-free route). Custom math stays unmeasured when no returns-delta is
+  declared, because a fee formula over pool state is invisible to a source
+  detector. The default gate no longer fails on an undetermined tier unless
+  `failOnInconclusive = true`, but it does fail when an engine failed or the
+  target was never recognised.
 - **Harness reach.** Hooks whose constructor needs a deployed dependency
   (Cork clones a `LiquidityToken`; WETHHook needs WETH) or a factory's
   `parameters()` (v2-on-v4) still cannot be stood up. A hook that refuses

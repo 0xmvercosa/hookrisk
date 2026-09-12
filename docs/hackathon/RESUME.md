@@ -205,6 +205,25 @@ re-implemented from described behaviour, nothing copied.
   looked when its status is `ok` (`enginesThatLooked` in
   `cli/src/scoring/derive.ts`).
 
+## Fourth pass: research adoption
+
+From `research/hacken.md` and `research/hookguard.md`, four detectors and three
+execution probes landed (notes-P/H/T): HS-03 admin surface (unguarded HIGH,
+owner-only MEDIUM, caller-funded liquidity paths LOW), HS-05 third-party calls
+in the swap path (one per destination, static/unhandled flagged), HS-06
+unbounded dynamic fee, HS-02's "delta flag declared, never returned" case; and
+the harness now probes every implemented callback from an EOA (corroborates
+HS-01 by execution), checks the selector each callback returns as the
+PoolManager, and tries a foreign pool key (`unvalidated-pool-key`
+classification). Complexity, autonomous-parameter-updates, external
+dependencies and price-impact are measured where the evidence exists.
+
+Known limit: v2-style `mint`/`burn`/`sync`, where the caller pays by
+transferring tokens beforehand, still read as unguarded HIGH admin surface
+(v2-on-v4); the caller-stake heuristic sees a `transferFrom(msg.sender, …)`,
+a msg.sender-indexed mapping, or a token-base call carrying msg.sender, and v2
+has none of those in the call.
+
 ## Open items, in priority order
 
 1. Detectors for the dimensions still unmeasured: HS-04 upgradeability

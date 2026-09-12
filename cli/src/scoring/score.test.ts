@@ -841,3 +841,36 @@ describe('dimensions raised by the new detectors', () => {
     });
   });
 });
+
+
+describe('silence corroborated by the profile', () => {
+  test('a clean profile lets the silent detectors measure 0 on three dimensions', async () => {
+    const { deriveScoringInput } = await import('./derive.js');
+    const profile = {
+      id: 'p', ruleClass: 'hook-profile' as const, title: 'Hook profile of Counter', description: 'profile',
+      severity: 'info' as const, confidence: 'high' as const,
+      location: { file: 'src/Counter.sol', line: 13 }, evidence: [],
+      engines: [{ engine: 'hookrisk', nativeRule: 'hookrisk-hook-profile', severity: 'info' as const, confidence: 'high' as const }],
+      discriminator: 'Counter',
+      metrics: {
+        callbacksImplemented: 4, callbacksDeclared: 4, stateWritesInCallbacks: 4,
+        externalCallsInSwapPath: 0, externalCallsInSwapPathThirdParty: 0,
+        internalFunctionsReachableFromCallbacks: 4, usesReturnsDelta: false, hasOwnerOnlyFunctions: false,
+      },
+    };
+    const input = deriveScoringInput({
+      findings: [profile],
+      engineResults: [{ engine: 'hookrisk', version: 'x', status: 'ok', findings: [profile], durationMs: 1, scope: { analysedContracts: ['src/Counter.sol:Counter'], targetAnalysed: true } }],
+      declared: {},
+      dimensionIds: ['priceImpactingBehavior', 'autonomousParameterUpdates', 'externalDependencies', 'customMath'],
+      contractName: 'Counter',
+    });
+    for (const id of ['priceImpactingBehavior', 'autonomousParameterUpdates', 'externalDependencies']) {
+      assert.equal(input.dimensions[id]!.source, 'measured', id);
+      assert.equal(input.dimensions[id]!.value, 0, id);
+      assert.ok(input.dimensions[id]!.evidence!.some((e) => /Corroborated by the hook profile/.test(e)), id);
+    }
+    // No profile metric speaks to custom math beyond the returns-delta, so it stays honest.
+    assert.equal(input.dimensions.customMath!.source, 'unmeasured');
+  });
+});

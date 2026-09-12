@@ -8,16 +8,16 @@ Executable assessment against the [Uniswap Hooks Security Framework](https://git
 | --- | --- |
 | Contract | `AntiSandwichMock` in `src/mocks/general/AntiSandwichMock.sol` |
 | Compiler | solc 0.8.26 |
-| Risk tier | **MEDIUM** 13/33, undetermined up to HIGH 25/33 |
+| Risk tier | **MEDIUM** 13/33, undetermined up to HIGH 19/33 |
 | Gate | ✅ Passed |
-| Findings | none · 1 classification |
-| Dimensions | 3 measured · 2 declared · 4 unmeasured |
+| Findings | none · 2 classifications |
+| Dimensions | 5 measured · 2 declared · 2 unmeasured |
 | Static analysis | ok |
 | Differential harness | ok |
 | Invariants | ✅ I1 passed · ✅ I2 passed · ✅ I3 passed |
 | Tool | hookrisk 0.1.0, rubric e7e8da52fd5717b6eb4517ea779b766f63148c41 |
 
-> **The tier is a range.** 13/33 is the sum of what could be measured or was declared; 4 dimensions have no detector or declaration. At their maximum the hook would score 25/33 (high). Declare them in `hookrisk.toml` to close the range.
+> **The tier is a range.** 13/33 is the sum of what could be measured or was declared; 2 dimensions have no detector or declaration. At their maximum the hook would score 19/33 (high). Declare them in `hookrisk.toml` to close the range.
 
 ## Findings
 
@@ -30,6 +30,7 @@ Properties of the hook that change how it is scored or tested. They are informat
 | Rule | Classification | Applies to | Detail |
 | --- | --- | --- | --- |
 | HS-07 `custom-accounting` | Custom accounting: the hook can alter settled amounts | `src/mocks/general/AntiSandwichMock.sol:15` | AntiSandwichMock (src/mocks/general/AntiSandwichMock.sol#15-50) declares custom-accounting permissions: `afterSwapReturnDelta` (bit 2). |
+| P-01 `unvalidated-pool-key` | The hook accepted a callback for a pool it is not attached to | `src/mocks/general/AntiSandwichMock.sol:15` | The differential harness initialised a second pool with the same currencies and hook but a different fee tier or tick spacing, then called the hook as the PoolManager with that pool's key; the hook did not reject it. |
 
 ## Hook profile
 
@@ -41,6 +42,7 @@ The static engine’s structural measurement of the contract. Complexity is deri
 | Callbacks declared | 2 |
 | State writes in callbacks | 6 |
 | External calls in the swap path | 2 |
+| externalCallsInSwapPathThirdParty | 0 |
 | Internal functions reachable from callbacks | 9 |
 | Returns a delta | true |
 | Owner-only surface | false |
@@ -52,12 +54,12 @@ The static engine’s structural measurement of the contract. Complexity is deri
 | --- | --- | --- | --- |
 | Complexity | 4/5 | measured | Returns a delta and makes an external call in the swap path ᵃ |
 | Custom math | 3/5 | measured | A custom curve or invariant function ᵃ |
-| External dependencies | — | unmeasured | _unmeasured_ ᵃ |
+| External dependencies | 0/3 | measured | None; the hook touches only the PoolManager and the pair's tokens ᵃ |
 | External liquidity exposure | — | unmeasured | _unmeasured_ ᵃ |
 | TVL potential | 0/5 | declared | Under $100K (experimental or personal project) |
 | Team maturity | 3/3 | declared | Unproven: no prior production deployments, or deployments lacking audits and operational rigor; new, anonymous, or no public track record |
 | Upgradeability | — | unmeasured | _unmeasured_ ᵃ |
-| Autonomous parameter updates | — | unmeasured | _unmeasured_ ᵃ |
+| Autonomous parameter updates | 0/3 | measured | All parameters set by an explicit privileged call ᵃ |
 | Price impacting behavior | 3/3 | measured | Returns a swap delta (custom curve or NoOp), or adjusts fees without a ceiling ᵃ |
 
 ᵃ Bracket supplied by hookrisk. The framework publishes brackets for only two of its nine dimensions; the rest are our reading of its prose. See [FEEDBACK.md](https://github.com/0xmvercosa/hookrisk/blob/main/FEEDBACK.md) #2.
@@ -65,20 +67,24 @@ The static engine’s structural measurement of the contract. Complexity is deri
 <details><summary>Evidence per dimension</summary>
 
 - **Complexity**
-  - hook-profile metrics: callbacksImplemented=2, callbacksDeclared=2, stateWritesInCallbacks=6, externalCallsInSwapPath=2, internalFunctionsReachableFromCallbacks=9, usesReturnsDelta=true, hasOwnerOnlyFunctions=false
+  - hook-profile metrics: callbacksImplemented=2, callbacksDeclared=2, stateWritesInCallbacks=6, externalCallsInSwapPath=2, externalCallsInSwapPathThirdParty=0, internalFunctionsReachableFromCallbacks=9, usesReturnsDelta=true, hasOwnerOnlyFunctions=false
   - Scored 4 by rule `usesReturnsDelta && externalCallsInSwapPath >= 1`: A hook that both alters settled amounts and leaves the swap path mid-flight has two interacting flows to reason about, not one. (hookrisk’s interpretation; the framework publishes no brackets)
   - The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target.
 - **Custom math**
   - 1 custom-accounting finding(s)
   - Custom accounting implies a custom curve or non-standard settlement arithmetic.
 - **External dependencies**
-  - Not measured: no detector for external-call-in-swap-path yet.
+  - No external-call-in-swap-path findings, and every detector that could produce one ran.
+  - Corroborated by the hook profile: zero third-party calls in the swap path.
 - **TVL potential**
   - Declared in hookrisk.toml. hookrisk does not measure tvlPotential.
 - **Team maturity**
   - Declared in hookrisk.toml. hookrisk does not measure teamMaturity.
 - **Upgradeability**
   - Not measured: no detector for upgradeable-hook (needs blocksec, which did not run); selfdestruct requires blocksec, which did not run.
+- **Autonomous parameter updates**
+  - No admin-surface findings, and every detector that could produce one ran.
+  - Corroborated by the hook profile: no owner-only surface, and HS-03 found no unguarded mutator of callback-read state.
 - **Price impacting behavior**
   - 1 custom-accounting finding(s)
   - A returns-delta permission lets the hook alter settled amounts, which is the framework’s definition of price-impacting behaviour.
@@ -122,6 +128,7 @@ Differential twin-pool harness: **ok**.
 | Pricing | v4 pricing: output compared against the reference pool |
 | Pool fee | static |
 | Initial liquidity | seeded on both pools |
+| Execution probes | eoa guard held on 2 callback(s); selectors ok; exclusivity accepted |
 
 | | Invariant | Result | Detail |
 | --- | --- | --- | --- |
@@ -132,14 +139,14 @@ Differential twin-pool harness: **ok**.
 | Observed | |
 | --- | --- |
 | Fuzz sequences | 1285 |
-| Swaps landed / compared / skipped | 13450 / 13450 / 0 |
+| Swaps landed / compared / skipped | 14070 / 14070 / 0 |
 | Swaps that reverted only with the hook | 0 |
-| Positions opened / closed | 7110 / 7110 |
-| Donations | 6760 |
-| Price checks / monotonicity violations | 13450 / 0 |
+| Positions opened / closed | 6820 / 6820 |
+| Donations | 6640 |
+| Price checks / monotonicity violations | 14070 / 0 |
 | Exit failures | 0 |
 
-The harness executed 13450 swap(s) (13450 compared against the reference pool, 0 skipped), opened 7110 and closed 7110 position(s), made 6760 donation(s) and ran 13450 price check(s) over 1285 sequence(s). An invariant with no relevant observations is reported inconclusive, not passed.
+The harness executed 14070 swap(s) (14070 compared against the reference pool, 0 skipped), opened 6820 and closed 6820 position(s), made 6640 donation(s) and ran 14070 price check(s) over 1285 sequence(s). An invariant with no relevant observations is reported inconclusive, not passed.
 
 ## Analysis coverage
 
@@ -158,10 +165,8 @@ Permissions resolved by static analysis and derived from the deployed runtime co
 
 ## Warnings
 
-- 4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
+- 2 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
 - trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured
-- trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured
-- trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured
 - trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured
 
 ---

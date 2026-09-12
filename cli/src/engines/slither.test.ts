@@ -140,7 +140,7 @@ const hookProfile = (contract = 'MyHook', file = 'src/MyHook.sol', permissions: 
         callbacksImplemented: 2,
         callbacksDeclared: 2,
         stateWritesInCallbacks: 1,
-        externalCallsInSwapPath: 0,
+        externalCallsInSwapPath: 0, externalCallsInSwapPathThirdParty: 0,
         internalFunctionsReachableFromCallbacks: 2,
         usesReturnsDelta: false,
         hasOwnerOnlyFunctions: false,

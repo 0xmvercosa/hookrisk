@@ -15,6 +15,70 @@
   },
   "findings": [
     {
+      "id": "85da038c7cfa389d",
+      "ruleClass": "admin-surface",
+      "title": "OrbitalHook.addLiquidity(uint256,uint256,uint256,address) (src/OrbitalHook.sol#351-416) (addLiquidity) is a user-facing function — the caller pays for or …",
+      "description": "OrbitalHook.addLiquidity(uint256,uint256,uint256,address) (src/OrbitalHook.sol#351-416) (addLiquidity) is a user-facing function — the caller pays for or draws on their own position — that writes `L_SQUARED` which the callbacks read. Permissionless by design for a liquidity path; not an admin surface.",
+      "severity": "low",
+      "confidence": "medium",
+      "location": {
+        "file": "src/OrbitalHook.sol",
+        "line": 351,
+        "endLine": 416
+      },
+      "function": {
+        "name": "addLiquidity"
+      },
+      "discriminator": "addLiquidity",
+      "evidence": [
+        "OrbitalHook.addLiquidity(uint256,uint256,uint256,address) (src/OrbitalHook.sol#351-416) (addLiquidity) is a user-facing function — the caller pays for or draws on their own position — that writes `L_SQUARED` which the callbacks read. Permissionless by design for a liquidity path; not an admin surface."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-admin-surface",
+          "severity": "low",
+          "confidence": "medium"
+        }
+      ],
+      "informsDimensions": [
+        "autonomousParameterUpdates",
+        "complexity"
+      ]
+    },
+    {
+      "id": "1d9b851ad7fb83f1",
+      "ruleClass": "admin-surface",
+      "title": "OrbitalHook.removeLiquidity(uint256,address) (src/OrbitalHook.sol#418-444) (removeLiquidity) is a user-facing function — the caller pays for or draws on …",
+      "description": "OrbitalHook.removeLiquidity(uint256,address) (src/OrbitalHook.sol#418-444) (removeLiquidity) is a user-facing function — the caller pays for or draws on their own position — that writes `L_SQUARED` which the callbacks read. Permissionless by design for a liquidity path; not an admin surface.",
+      "severity": "low",
+      "confidence": "medium",
+      "location": {
+        "file": "src/OrbitalHook.sol",
+        "line": 418,
+        "endLine": 444
+      },
+      "function": {
+        "name": "removeLiquidity"
+      },
+      "discriminator": "removeLiquidity",
+      "evidence": [
+        "OrbitalHook.removeLiquidity(uint256,address) (src/OrbitalHook.sol#418-444) (removeLiquidity) is a user-facing function — the caller pays for or draws on their own position — that writes `L_SQUARED` which the callbacks read. Permissionless by design for a liquidity path; not an admin surface."
+      ],
+      "engines": [
+        {
+          "engine": "hookrisk",
+          "nativeRule": "hookrisk-admin-surface",
+          "severity": "low",
+          "confidence": "medium"
+        }
+      ],
+      "informsDimensions": [
+        "autonomousParameterUpdates",
+        "complexity"
+      ]
+    },
+    {
       "id": "73572973470128d8",
       "ruleClass": "custom-accounting",
       "title": "OrbitalHook (src/OrbitalHook.sol#18-476) declares custom-accounting permissions: `beforeSwapReturnDelta` (bit 3)",
@@ -77,6 +141,7 @@
         "callbacksDeclared": 3,
         "stateWritesInCallbacks": 3,
         "externalCallsInSwapPath": 3,
+        "externalCallsInSwapPathThirdParty": 0,
         "internalFunctionsReachableFromCallbacks": 8,
         "usesReturnsDelta": true,
         "hasOwnerOnlyFunctions": false
@@ -165,8 +230,8 @@
     }
   ],
   "score": {
-    "total": 13,
-    "totalUpperBound": 25,
+    "total": 14,
+    "totalUpperBound": 20,
     "tier": "medium",
     "tierUpperBound": "high",
     "inconclusive": true,
@@ -185,7 +250,7 @@
         "bracketLabel": "Returns a delta and makes an external call in the swap path",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "hook-profile metrics: callbacksImplemented=1, callbacksDeclared=3, stateWritesInCallbacks=3, externalCallsInSwapPath=3, internalFunctionsReachableFromCallbacks=8, usesReturnsDelta=true, hasOwnerOnlyFunctions=false",
+          "hook-profile metrics: callbacksImplemented=1, callbacksDeclared=3, stateWritesInCallbacks=3, externalCallsInSwapPath=3, externalCallsInSwapPathThirdParty=0, internalFunctionsReachableFromCallbacks=8, usesReturnsDelta=true, hasOwnerOnlyFunctions=false",
           "Scored 4 by rule `usesReturnsDelta && externalCallsInSwapPath >= 1`: A hook that both alters settled amounts and leaves the swap path mid-flight has two interacting flows to reason about, not one. (hookrisk’s interpretation; the framework publishes no brackets)",
           "The hook implements callbacks with non-trivial structure. This establishes a floor only; the measured value comes from the hook-profile metrics when the engine profiled the target."
         ]
@@ -206,13 +271,14 @@
       {
         "id": "externalDependencies",
         "name": "External dependencies",
-        "value": null,
+        "value": 0,
         "max": 3,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "None; the hook touches only the PoolManager and the pair's tokens",
         "bracketsAreInterpretation": true,
         "evidence": [
-          "Not measured: no detector for external-call-in-swap-path yet."
+          "No external-call-in-swap-path findings, and every detector that could produce one ran.",
+          "Corroborated by the hook profile: zero third-party calls in the swap path."
         ]
       },
       {
@@ -264,12 +330,16 @@
       {
         "id": "autonomousParameterUpdates",
         "name": "Autonomous parameter updates",
-        "value": null,
+        "value": 1,
         "max": 3,
-        "source": "unmeasured",
-        "bracketLabel": null,
+        "source": "measured",
+        "bracketLabel": "Self-adjusting within hard-coded bounds and a rate limit",
         "bracketsAreInterpretation": true,
-        "evidence": []
+        "evidence": [
+          "2 admin-surface finding(s)",
+          "Scored 1 by rule `always` on addLiquidity (low): An admin-surface finding below MEDIUM still evidences a parameter surface whose guardrails were not verified; the same floor applies. (hookrisk’s interpretation; the framework publishes no brackets)",
+          "HS-03 found a state-changing external function on the hook. The framework grades this dimension by the guardrails on a parameter change (bounds, rate limit, gating); an admin surface is where those guardrails would have to live."
+        ]
       },
       {
         "id": "priceImpactingBehavior",
@@ -292,6 +362,14 @@
         "firedBy": [
           "customMath >= 3 (is 3)",
           "returns-delta-permission"
+        ],
+        "derivationIsInterpretation": true
+      },
+      {
+        "id": "autonomous",
+        "name": "Autonomous Parameter Updates or Self-Tuning Hook",
+        "firedBy": [
+          "autonomousParameterUpdates >= 1 (is 1)"
         ],
         "derivationIsInterpretation": true
       },
@@ -346,6 +424,23 @@
         ]
       },
       {
+        "action": "invariant-testing",
+        "label": "Invariant and stateful fuzz testing",
+        "strength": "required",
+        "sources": [
+          {
+            "from": "trigger:custom-math",
+            "strength": "recommended",
+            "detail": "Stateful fuzzing may significantly improve assurance"
+          },
+          {
+            "from": "trigger:autonomous",
+            "strength": "required",
+            "detail": "For state transitions"
+          }
+        ]
+      },
+      {
         "action": "math-specialist-audit",
         "label": "Audit by a math and invariants specialist",
         "strength": "required",
@@ -363,6 +458,18 @@
         ]
       },
       {
+        "action": "recovery-procedures",
+        "label": "Documented debugging and recovery procedures",
+        "strength": "required",
+        "sources": [
+          {
+            "from": "trigger:autonomous",
+            "strength": "required",
+            "detail": "Debugging and recovery procedures must be documented"
+          }
+        ]
+      },
+      {
         "action": "static-analysis",
         "label": "Automated static analysis",
         "strength": "required",
@@ -375,6 +482,18 @@
         ]
       },
       {
+        "action": "timelock-or-minimise-upgradeability",
+        "label": "Minimise or timelock upgradeability",
+        "strength": "required",
+        "sources": [
+          {
+            "from": "trigger:autonomous",
+            "strength": "required",
+            "detail": "Upgradeability must be minimized or time-locked"
+          }
+        ]
+      },
+      {
         "action": "unit-tests-boundaries",
         "label": "Unit tests covering input-range boundaries",
         "strength": "required",
@@ -383,6 +502,26 @@
             "from": "trigger:custom-math",
             "strength": "required",
             "detail": "Validate intermediate steps, edge cases and input-range boundaries"
+          }
+        ]
+      },
+      {
+        "action": "monitoring",
+        "label": "Continuous monitoring with anomaly detection",
+        "strength": "strongly-recommended",
+        "sources": [
+          {
+            "from": "tier:medium",
+            "strength": "recommended",
+            "detail": "If external dependencies exist"
+          },
+          {
+            "from": "trigger:custom-math",
+            "strength": "recommended"
+          },
+          {
+            "from": "trigger:autonomous",
+            "strength": "strongly-recommended"
           }
         ]
       },
@@ -406,33 +545,9 @@
           {
             "from": "trigger:custom-math",
             "strength": "recommended"
-          }
-        ]
-      },
-      {
-        "action": "invariant-testing",
-        "label": "Invariant and stateful fuzz testing",
-        "strength": "recommended",
-        "sources": [
-          {
-            "from": "trigger:custom-math",
-            "strength": "recommended",
-            "detail": "Stateful fuzzing may significantly improve assurance"
-          }
-        ]
-      },
-      {
-        "action": "monitoring",
-        "label": "Continuous monitoring with anomaly detection",
-        "strength": "recommended",
-        "sources": [
-          {
-            "from": "tier:medium",
-            "strength": "recommended",
-            "detail": "If external dependencies exist"
           },
           {
-            "from": "trigger:custom-math",
+            "from": "trigger:price-impact",
             "strength": "recommended"
           }
         ]
@@ -440,21 +555,23 @@
       {
         "action": "second-audit",
         "label": "Second independent audit",
-        "strength": "optional",
+        "strength": "recommended",
         "sources": [
           {
             "from": "tier:medium",
             "strength": "optional",
             "detail": "For math or complex components"
+          },
+          {
+            "from": "trigger:autonomous",
+            "strength": "recommended"
           }
         ]
       }
     ],
     "warnings": [
-      "4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
+      "2 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.",
       "trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured",
-      "trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured",
-      "trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured",
       "trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured"
     ]
   },
@@ -464,8 +581,8 @@
       "displayName": "hookrisk Slither detectors",
       "version": "0.11.6",
       "status": "ok",
-      "findingCount": 4,
-      "durationMs": 4921
+      "findingCount": 6,
+      "durationMs": 3479
     },
     {
       "engine": "harness",
@@ -473,7 +590,7 @@
       "version": "1.7.1",
       "status": "ok",
       "findingCount": 0,
-      "durationMs": 5481
+      "durationMs": 4042
     }
   ],
   "coverage": {
@@ -536,7 +653,26 @@
       "customCurve": true,
       "dynamicFee": false,
       "seeded": "hooked-failed",
-      "hookedSeedRevert": "0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001755736520637573746f6d206164644c6971756964697479000000000000000000"
+      "hookedSeedRevert": "0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001755736520637573746f6d206164644c6971756964697479000000000000000000",
+      "probes": {
+        "eoaGuard": {
+          "beforeAddLiquidity": "guarded",
+          "beforeRemoveLiquidity": "guarded",
+          "beforeSwap": "guarded"
+        },
+        "exclusivity": "not-applicable",
+        "selectors": {
+          "beforeAddLiquidity": "reverted",
+          "beforeRemoveLiquidity": "reverted",
+          "beforeSwap": "reverted"
+        },
+        "exclusivityReason": "every swap or liquidity callback reverts on the hook's own pool, so a revert on a foreign key would prove nothing",
+        "selectorReverts": {
+          "beforeAddLiquidity": "0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001755736520637573746f6d206164644c6971756964697479000000000000000000",
+          "beforeRemoveLiquidity": "0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001a55736520637573746f6d2072656d6f76654c6971756964697479000000000000",
+          "beforeSwap": "0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001c4f72626974616c3a20496e76617269616e742076696f6c6174696f6e00000000"
+        }
+      }
     }
   },
   "invariants": [
