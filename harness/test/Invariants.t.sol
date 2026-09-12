@@ -3,8 +3,6 @@ pragma solidity ^0.8.26;
 
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 import {TwinPools} from "./TwinPools.sol";
@@ -53,8 +51,7 @@ contract HonestFeeHookInvariants is TwinPools {
 
     function setUp() public {
         _setUpTwinPools(
-            "FeeHooks.sol:HonestFeeHook",
-            uint160(Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG)
+            "FeeHooks.sol:HonestFeeHook", uint160(Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG)
         );
 
         // Seed generously and identically. Swap notionals in the handler are
@@ -62,8 +59,8 @@ contract HonestFeeHookInvariants is TwinPools {
         // the limit — a limit-bounded swap returns an amount determined by the
         // limit rather than by the hook, and comparing two of those measures
         // nothing.
-        _seedLiquidity(vanillaKey);
-        _seedLiquidity(hookedKey);
+        _seedTwins();
+        assertTrue(run.hookedSeeded, "the honest hook must accept the seed position");
 
         handler = new TwinHandler(manager, swapRouter, modifyLiquidityRouter, donateRouter, vanillaKey, hookedKey);
         _fund(address(handler), 1e27);
@@ -84,14 +81,6 @@ contract HonestFeeHookInvariants is TwinPools {
         targetContract(address(handler));
     }
 
-    function _seedLiquidity(PoolKey memory key) internal {
-        modifyLiquidityRouter.modifyLiquidity(
-            key,
-            ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e21, salt: bytes32(0)}),
-            ""
-        );
-    }
-
     // --- I1: conservation and solvency ---------------------------------------
 
     /// @notice No token is created or destroyed by any sequence of operations.
@@ -108,14 +97,10 @@ contract HonestFeeHookInvariants is TwinPools {
     /// @notice The PoolManager is never a debtor to itself.
     function invariant_I1_managerSolvent() public view {
         assertGe(
-            MockERC20(Currency.unwrap(currency0)).balanceOf(address(manager)),
-            0,
-            "I1: manager currency0 underwater"
+            MockERC20(Currency.unwrap(currency0)).balanceOf(address(manager)), 0, "I1: manager currency0 underwater"
         );
         assertGe(
-            MockERC20(Currency.unwrap(currency1)).balanceOf(address(manager)),
-            0,
-            "I1: manager currency1 underwater"
+            MockERC20(Currency.unwrap(currency1)).balanceOf(address(manager)), 0, "I1: manager currency1 underwater"
         );
     }
 
@@ -166,12 +151,11 @@ contract HonestFeeHookInvariants is TwinPools {
 
     function _trackedBalance(Currency currency) internal view returns (uint256) {
         MockERC20 token = MockERC20(Currency.unwrap(currency));
-        return token.balanceOf(address(this)) + token.balanceOf(address(handler))
-            + token.balanceOf(address(manager)) + token.balanceOf(address(hook))
-            + token.balanceOf(address(swapRouter)) + token.balanceOf(address(modifyLiquidityRouter))
-            + token.balanceOf(address(swapRouterNoChecks)) + token.balanceOf(address(modifyLiquidityNoChecks))
-            + token.balanceOf(address(donateRouter)) + token.balanceOf(address(takeRouter))
-            + token.balanceOf(address(claimsRouter)) + token.balanceOf(address(nestedActionRouter))
-            + token.balanceOf(address(actionsRouter));
+        return token.balanceOf(address(this)) + token.balanceOf(address(handler)) + token.balanceOf(address(manager))
+            + token.balanceOf(address(hook)) + token.balanceOf(address(swapRouter))
+            + token.balanceOf(address(modifyLiquidityRouter)) + token.balanceOf(address(swapRouterNoChecks))
+            + token.balanceOf(address(modifyLiquidityNoChecks)) + token.balanceOf(address(donateRouter))
+            + token.balanceOf(address(takeRouter)) + token.balanceOf(address(claimsRouter))
+            + token.balanceOf(address(nestedActionRouter)) + token.balanceOf(address(actionsRouter));
     }
 }
