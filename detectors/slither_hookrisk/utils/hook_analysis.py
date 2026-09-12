@@ -21,12 +21,17 @@ manager, wherever that comparison happens to live.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Iterable, Iterator
 
 from slither.core.cfg.node import Node, NodeType
 from slither.core.declarations import Contract, Function, Modifier
-from slither.core.declarations.solidity_variables import SolidityVariableComposed
+from slither.core.declarations.solidity_variables import (
+    SolidityCustomRevert,
+    SolidityVariableComposed,
+)
 from slither.core.variables.state_variable import StateVariable
+from slither.slithir.variables import Constant
 from slither.slithir.operations import (
     Binary,
     BinaryType,
@@ -50,9 +55,17 @@ from .hooks_spec import (
 __all__ = [
     "HookCallback",
     "normalize_signature",
-    "always_reverts",
-    "is_effectually_implemented",
+    "HOOK_NOT_IMPLEMENTED_ERROR",
+    "RevertReason",
+    "unconditional_revert",
+    "is_project_source",
+    "CallbackStatus",
+    "CallbackImplementation",
+    "classify_callback",
+    "resolve_override",
     "implemented_callbacks",
+    "LegacyAbiEvidence",
+    "legacy_abi_evidence",
     "is_hook_contract",
     "pool_manager_variables",
     "guards_pool_manager",
@@ -176,30 +189,6 @@ def implemented_callbacks(contract: Contract) -> list[HookCallback]:
     return found
 
 
-def always_reverts(function: Function) -> bool:
-    """Whether every path through `function` ends in a revert.
-
-    Approximated as: the function contains a revert and has no return statement.
-    That is exactly the shape of an unimplemented-callback stub and is cheap to
-    check; a function with conditional reverts has a return somewhere and is
-    correctly excluded.
-    """
-    if not function.is_implemented:
-        return False
-
-    has_revert = False
-    for node in function.nodes:
-        if node.type == NodeType.THROW:
-            has_revert = True
-        elif node.type == NodeType.RETURN:
-            return False
-        else:
-            for ir in node.irs:
-                if isinstance(ir, SolidityCall) and "revert" in str(ir.function.name):
-                    has_revert = True
-    return has_revert
-
-
 def resolve_override(contract: Contract, function: Function) -> Function:
     """Return the most-derived implementation of `function` visible on `contract`.
 
@@ -230,8 +219,125 @@ def resolve_override(contract: Contract, function: Function) -> Function:
     return best or function
 
 
-def is_effectually_implemented(function: Function, contract: Contract | None = None) -> bool:
-    """Whether a callback actually does something, or is only a stub.
+#: Name of the error OpenZeppelin's `BaseHook` (and the 2023 v4-periphery one,
+#: and every copy-pasted fork of either) raises from a callback delegate that
+#: was never overridden. It is the one revert that means "nobody wrote this",
+#: as opposed to "somebody wrote this to refuse".
+HOOK_NOT_IMPLEMENTED_ERROR = "HookNotImplemented"
+
+
+@dataclass(frozen=True)
+class RevertReason:
+    """Why a function reverts on every path.
+
+    `error_name` is set for `revert CustomError(...)`, `message` for
+    `revert("...")`; a bare `revert()` or a legacy `throw` sets neither.
+    """
+
+    error_name: str | None = None
+    message: str | None = None
+
+    @property
+    def is_hook_not_implemented(self) -> bool:
+        return self.error_name == HOOK_NOT_IMPLEMENTED_ERROR
+
+    def describe(self) -> str:
+        if self.error_name is not None:
+            return f"{self.error_name}()"
+        if self.message is not None:
+            return f'"{self.message}"'
+        return "revert()"
+
+
+def unconditional_revert(function: Function) -> RevertReason | None:
+    """The reason `function` reverts on every path, or None if it can return.
+
+    Approximated as: the function contains a revert and has no return statement.
+    That is exactly the shape of a callback stub *and* of a deliberate
+    revert-guard, and telling those two apart is what `classify_callback` is
+    for — this function only reports *what* the revert says.
+
+    A function with conditional reverts has a return somewhere and is correctly
+    excluded. When several unconditional reverts exist (dead code after the
+    first), the first one lexically is reported.
+    """
+    if not function.is_implemented:
+        return None
+
+    reason: RevertReason | None = None
+    for node in function.nodes:
+        if node.type == NodeType.RETURN:
+            return None
+        if node.type == NodeType.THROW:
+            reason = reason or RevertReason()
+            continue
+        for ir in node.irs:
+            if not isinstance(ir, SolidityCall):
+                continue
+            solidity_function = ir.function
+            if isinstance(solidity_function, SolidityCustomRevert):
+                reason = reason or RevertReason(error_name=solidity_function.custom_error.name)
+            elif str(solidity_function.name).startswith("revert"):
+                message = None
+                if ir.arguments:
+                    argument = ir.arguments[0]
+                    if isinstance(argument, Constant) and isinstance(argument.value, str):
+                        message = argument.value
+                reason = reason or RevertReason(message=message)
+    return reason
+
+
+def is_project_source(function: Function) -> bool:
+    """Whether `function` was written in the project being scanned.
+
+    crytic-compile marks everything under the Foundry `libs` paths (or
+    `node_modules`) as a dependency; anything else is the developer's own code.
+    A revert in the developer's own code is a decision; the same revert inside
+    `lib/` is a library default they may not even know exists.
+    """
+    return not function.source_mapping.is_dependency
+
+
+class CallbackStatus(Enum):
+    """What a callback's most-derived delegate actually does when called."""
+
+    #: The delegate does work: it can return.
+    IMPLEMENTED = "implemented"
+    #: Nobody wrote the delegate. Either the callback is not overridden at all
+    #: and the base class's `HookNotImplemented()` stub answers, or the override
+    #: lives in a dependency. Declaring the permission is a liveness bug.
+    STUB = "stub"
+    #: The developer overrode the delegate in their own sources with a revert of
+    #: their own choosing. The PoolManager-routed operation is refused by
+    #: design — a WETH wrapper hook that rejects direct liquidity, an
+    #: order-book hook that forces its own deposit path. Not a bug.
+    INTENTIONALLY_DISABLED = "intentionally-disabled"
+
+
+@dataclass(frozen=True)
+class CallbackImplementation:
+    """The verdict of `classify_callback` for one external callback."""
+
+    status: CallbackStatus
+    #: The function whose body decided the verdict: the overridden internal
+    #: delegate for a BaseHook descendant, the external callback itself when it
+    #: has no delegate. Findings anchor here so they point at the developer's
+    #: own line and survive `--exclude-dependencies`.
+    delegate: Function
+    #: Set when the delegate unconditionally reverts.
+    revert: RevertReason | None = None
+
+    @property
+    def is_implemented(self) -> bool:
+        return self.status is CallbackStatus.IMPLEMENTED
+
+    @property
+    def is_intentionally_disabled(self) -> bool:
+        return self.status is CallbackStatus.INTENTIONALLY_DISABLED
+
+
+def classify_callback(function: Function, contract: Contract) -> CallbackImplementation:
+    """Decide whether a callback does work, is an unwritten stub, or refuses on purpose.
 
     Necessary because of how the canonical base class works. OpenZeppelin's
     `BaseHook` implements every external callback — guarded, and delegating to an
@@ -245,14 +351,32 @@ def is_effectually_implemented(function: Function, contract: Contract | None = N
     and every BaseHook hook looks like it implements all fourteen permissions;
     treat delegating callbacks as stubs and no hook implements anything.
 
+    A single "does it revert" boolean is still not enough. Four of fourteen
+    real-world hooks we scanned override a liquidity delegate with a revert of
+    their own (`LiquidityNotAllowed()`, `"No v4 Liquidity allowed"`), which is
+    the same IR shape as the base stub but the opposite meaning: the permission
+    is declared precisely so the PoolManager routes there and gets refused.
+    Reporting that as "the pool is unusable" at HIGH is crying wolf, and a tool
+    that cries wolf on deliberate design gets switched off.
+
+    The distinction is ownership plus the error's name. A revert is
+    INTENTIONALLY_DISABLED when its delegate is declared in the project's own
+    sources (not under a dependency path) and raises anything other than
+    `HookNotImplemented`. The name check matters because hooks routinely vendor
+    `BaseHook` into `src/base/` — WETHHook does — which makes the stub
+    project-owned without making it intentional.
+
     Args:
         function: The external callback.
         contract: The contract under analysis. Required to resolve overrides of
             the internal delegate; without it, an overridden delegate is missed
             and the callback is misreported as a stub.
     """
-    if always_reverts(function):
-        return False
+    # Callbacks that revert directly, without a delegate (a hand-rolled hook
+    # with `function beforeSwap(...) external { revert Nope(); }`).
+    own_revert = unconditional_revert(function)
+    if own_revert is not None:
+        return _classify_revert(function, own_revert)
 
     delegates: list[Function] = []
     for call in function.internal_calls:
@@ -261,16 +385,83 @@ def is_effectually_implemented(function: Function, contract: Contract | None = N
             continue
         # Modifiers show up here too. A modifier is not a delegate, and treating
         # one as such is actively harmful: `onlyPoolManager` reverts and never
-        # returns, so it satisfies `always_reverts`, and a correctly guarded
-        # callback would be written off as an unimplemented stub.
+        # returns, so it satisfies `unconditional_revert`, and a correctly
+        # guarded callback would be written off as an unimplemented stub.
         if isinstance(target, Modifier):
             continue
-        delegates.append(resolve_override(contract, target) if contract else target)
+        delegates.append(resolve_override(contract, target))
 
-    if delegates and all(always_reverts(target) for target in delegates):
-        return False
+    reverting = [(delegate, unconditional_revert(delegate)) for delegate in delegates]
+    if not delegates or not all(reason is not None for _, reason in reverting):
+        return CallbackImplementation(CallbackStatus.IMPLEMENTED, delegate=function)
 
-    return True
+    # Every delegate reverts. If any of them is a deliberate, project-owned
+    # refusal that is the verdict; a stub next to a deliberate revert is still
+    # a deliberate revert from the PoolManager's point of view.
+    verdicts = [_classify_revert(delegate, reason) for delegate, reason in reverting]
+    for verdict in verdicts:
+        if verdict.is_intentionally_disabled:
+            return verdict
+    return verdicts[0]
+
+
+def _classify_revert(delegate: Function, reason: RevertReason) -> CallbackImplementation:
+    if is_project_source(delegate) and not reason.is_hook_not_implemented:
+        return CallbackImplementation(CallbackStatus.INTENTIONALLY_DISABLED, delegate, reason)
+    return CallbackImplementation(CallbackStatus.STUB, delegate, reason)
+
+
+@dataclass(frozen=True)
+class LegacyAbiEvidence:
+    """Signs that a contract targets a hook interface older than the shipped one.
+
+    Five of fourteen real-world hooks we scanned are on the 2023 interface.
+    The dangerous part is not that they are unrecognised — it is that they are
+    *partly* recognised. `afterInitialize(address,PoolKey,uint160,int24)` has
+    never changed, so a 2023 hook that implements it passes `is_hook_contract`,
+    and HS-02 then accuses it of "not declaring getHookPermissions()" when it
+    declares `getHooksCalls()`, the 2023 spelling. Reporting a wrong reason at
+    HIGH is worse than reporting nothing, so the evidence is collected here and
+    consulted by `is_hook_contract` as well as by the unsupported-ABI detector.
+    """
+
+    #: `getHooksCalls()` is defined — the 2023 permission declaration, which was
+    #: abstract on that era's BaseHook and therefore present on every hook.
+    declares_hooks_calls: bool
+    #: External functions named like an IHooks callback whose normalised
+    #: signature is not the shipped one: `beforeSwap` without `hookData`,
+    #: `ModifyLiquidityParams` without `salt`, `beforeInitialize` with the
+    #: mid-2024 `hookData` argument.
+    mismatched_callbacks: tuple[str, ...]
+    #: Inherits something called `BaseHook`. Not evidence on its own — every
+    #: current hook does too — but with no recognised callback it is what a
+    #: 2023 v4-periphery `BaseHook` descendant looks like.
+    inherits_base_hook: bool
+
+    @property
+    def is_conclusive(self) -> bool:
+        """Evidence strong enough to say the contract is on another interface."""
+        return self.declares_hooks_calls
+
+    def __bool__(self) -> bool:
+        return self.declares_hooks_calls or bool(self.mismatched_callbacks) or self.inherits_base_hook
+
+
+def legacy_abi_evidence(contract: Contract) -> LegacyAbiEvidence:
+    """Collect the signs that `contract` predates the shipped hook interface."""
+    mismatched = sorted(
+        {
+            function.name
+            for function in contract.functions_entry_points
+            if function.name in CALLBACK_SIGNATURES
+            and normalize_signature(function.solidity_signature) != CALLBACK_SIGNATURES[function.name]
+        }
+    )
+    return LegacyAbiEvidence(
+        declares_hooks_calls=any(f.name == "getHooksCalls" for f in contract.functions),
+        mismatched_callbacks=tuple(mismatched),
+        inherits_base_hook=any(base.name == "BaseHook" for base in contract.inheritance),
+    )
 
 
 def is_hook_contract(contract: Contract) -> bool:
@@ -279,8 +470,15 @@ def is_hook_contract(contract: Contract) -> bool:
     Interfaces, libraries and abstract bases are excluded: they cannot be
     deployed as a hook, and reporting a missing access-control check on
     `IHooks` itself is the kind of noise that gets a tool switched off.
+
+    A contract with conclusive legacy-ABI evidence is excluded too, even when
+    one of its callbacks happens to match the current signature: the detectors
+    would read its permissions wrong and accuse it of the wrong thing. The
+    unsupported-ABI classification reports it instead. See `LegacyAbiEvidence`.
     """
     if contract.is_interface or contract.is_library or contract.is_abstract:
+        return False
+    if legacy_abi_evidence(contract).is_conclusive:
         return False
     return bool(implemented_callbacks(contract))
 

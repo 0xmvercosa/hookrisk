@@ -14,7 +14,7 @@ PYTHON    := $(shell [ -x $(VENV)/bin/python ] && echo $(VENV)/bin/python || ech
 PIP       := $(shell [ -x $(VENV)/bin/pip ] && echo $(VENV)/bin/pip || echo pip3)
 SLITHER   := $(shell [ -x $(VENV)/bin/slither ] && echo $(VENV)/bin/slither || echo slither)
 
-DETECTOR_ARGS := hookrisk-unprotected-callback,hookrisk-flag-divergence,hookrisk-custom-accounting
+DETECTOR_ARGS := hookrisk-unprotected-callback,hookrisk-flag-divergence,hookrisk-custom-accounting,hookrisk-disabled-callback,hookrisk-unsupported-abi
 
 .PHONY: help
 help: ## Show this help
@@ -92,17 +92,43 @@ test-harness: ## Foundry: spec cross-check, invariants, planted-bug detection
 test-cli: ## TypeScript: engines, scoring, config
 	@cd cli && npm run --silent test
 
+# One JSON scan per corpus directory, gated with jq rather than by grepping the
+# human-readable log. The three gates are deliberately asymmetric:
+#
+#   bad     must produce at least one High finding — the detectors work.
+#   good    must produce nothing at High or Medium, and nothing from the
+#           unsupported-ABI classification (every good hook is on the current
+#           interface). Informational classifications are allowed: OZ's
+#           AntiSandwich legitimately uses custom accounting, and
+#           IntentionalRevertHook is *meant* to trip `hookrisk-disabled-callback`.
+#   legacy  must produce unsupported-ABI classifications and nothing else — the
+#           point of the fixture is that the scan admits it did not look,
+#           without inventing findings it could not have derived.
+#
+# `--fail-none` so Slither's exit code reflects "did the scan run", not "were
+# there findings"; the pipeline then checks `.success` so a compile failure is
+# a loud red FAIL rather than an empty finding list that passes the good gate.
+# The finer-grained expectations (discriminators, which contract each finding
+# anchors on, the in-file controls) live in detectors/tests/test_corpus.py,
+# run last; it needs only the standard library.
+CORPUS_SCAN = cd corpus && $(abspath $(SLITHER)) $(1) --detect $(DETECTOR_ARGS) --exclude-dependencies --fail-none --json - 2>/dev/null
+JQ_SEVERE  = [.results.detectors[] | select(.impact == "High" or .impact == "Medium")] | length
+
 .PHONY: test-corpus
-test-corpus: ## Detectors must fire on corpus/src/bad and stay silent on corpus/src/good
-	@echo "--- corpus/src/bad (must fire) ---"
-	@cd corpus && $(abspath $(SLITHER)) src/bad --detect $(DETECTOR_ARGS) --exclude-dependencies 2>&1 \
-		| grep -E 'result\(s\) found' \
-		| grep -qv '^INFO:Slither:. analyzed .* 0 result' \
-		|| { echo "FAIL: detectors found nothing in the positive corpus"; exit 1; }
-	@echo "--- corpus/src/good (must be silent) ---"
-	@cd corpus && $(abspath $(SLITHER)) src/good --detect $(DETECTOR_ARGS) --exclude-dependencies 2>&1 \
-		| grep -qE '0 result\(s\) found' \
+test-corpus: ## Detectors must fire on corpus/src/bad, stay silent on src/good, and admit src/legacy is unreadable
+	@command -v jq >/dev/null || { echo "FAIL: jq is required for the corpus gates"; exit 1; }
+	@echo "--- corpus/src/bad (must fire at High) ---"
+	@$(call CORPUS_SCAN,src/bad) | jq -e '.success and (($(JQ_SEVERE)) > 0)' >/dev/null \
+		|| { echo "FAIL: detectors found nothing severe in the positive corpus"; exit 1; }
+	@echo "--- corpus/src/good (nothing at High or Medium, no unsupported-ABI) ---"
+	@$(call CORPUS_SCAN,src/good) | jq -e '.success and (($(JQ_SEVERE)) == 0) and ([.results.detectors[] | select(.check == "hookrisk-unsupported-abi")] | length == 0)' >/dev/null \
 		|| { echo "FAIL: false positive on the negative corpus"; exit 1; }
+	@echo "--- corpus/src/legacy (only unsupported-abi) ---"
+	@$(call CORPUS_SCAN,src/legacy) | jq -e '.success and (.results.detectors | length > 0) and all(.results.detectors[]; .check == "hookrisk-unsupported-abi")' >/dev/null \
+		|| { echo "FAIL: legacy corpus must produce unsupported-ABI classifications and nothing else"; exit 1; }
+	@echo "--- detectors/tests (finding-level expectations) ---"
+	@cd detectors && HOOKRISK_SLITHER_BIN=$(abspath $(SLITHER)) $(abspath $(PYTHON)) -m unittest discover -s tests -v \
+		|| { echo "FAIL: detectors/tests"; exit 1; }
 	@echo "corpus gates passed"
 
 .PHONY: deep

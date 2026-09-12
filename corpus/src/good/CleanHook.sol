@@ -10,11 +10,24 @@ pragma solidity ^0.8.26;
 // working hooks as well as broken ones, and a finding here fails the build just
 // as loudly as a missed finding in corpus/src/bad/.
 //
-// `AntiSandwichHook` and `LiquidityPenaltyHook` are pulled in from OpenZeppelin's
-// uniswap-hooks library on purpose. They are non-trivial, externally reviewed
-// production hooks — exactly the kind of code a detector tuned on toy examples
-// tends to flag. Compiling them into this unit means every hookrisk detector is
-// run against them on every CI build.
+// OpenZeppelin's `AntiSandwichHook`, `LimitOrderHook` and `LiquidityPenaltyHook`
+// are pulled in from the uniswap-hooks library on purpose. They are non-trivial,
+// externally reviewed production hooks — exactly the kind of code a detector
+// tuned on toy examples tends to flag. Two things are needed for the detectors
+// to actually run against them, and both were previously missing:
+//
+//   1. They are `abstract` at the pinned commit (each leaves a fee-handling
+//      hook for the integrator to fill in), and HookriskDetector skips abstract
+//      contracts. So the library's concrete `*Mock` contracts are imported
+//      instead.
+//   2. Findings whose every element lives under a dependency path are dropped
+//      by `--exclude-dependencies`, which is how the corpus gate runs. A finding
+//      on `lib/uniswap-hooks/.../AntiSandwichMock.sol` would never reach the
+//      gate. So each mock is subclassed here, in project source, and findings
+//      that anchor on the contract survive.
+//
+// Importing the abstract hooks alone made the gate look like it covered
+// production code while covering nothing. See docs/hackathon/notes-C.md.
 //
 // CleanHook itself is deliberately mundane: correctly guarded through BaseHook,
 // permissions declared to match exactly what it implements, no admin surface, no
@@ -31,11 +44,26 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
-// Compiled solely so the detectors run against real production hooks.
-// solhint-disable-next-line no-unused-import
-import {AntiSandwichHook} from "@openzeppelin/uniswap-hooks/src/general/AntiSandwichHook.sol";
-// solhint-disable-next-line no-unused-import
-import {LiquidityPenaltyHook} from "@openzeppelin/uniswap-hooks/src/general/LiquidityPenaltyHook.sol";
+import {AntiSandwichMock} from "@openzeppelin/uniswap-hooks/src/mocks/general/AntiSandwichMock.sol";
+import {LimitOrderHookMock} from "@openzeppelin/uniswap-hooks/src/mocks/general/LimitOrderHookMock.sol";
+import {LiquidityPenaltyHookMock} from "@openzeppelin/uniswap-hooks/src/mocks/general/LiquidityPenaltyHookMock.sol";
+
+// Project-source descendants of OpenZeppelin's concrete example hooks. They add
+// nothing; they exist so the hooks are non-abstract, non-dependency contracts
+// the detectors run against and the corpus gate can see. HS-01 and HS-02 must
+// stay silent on all three. HS-07 classifying AntiSandwich as custom
+// accounting (it declares afterSwapReturnDelta) is correct and allowed.
+contract ProductionAntiSandwichHook is AntiSandwichMock {
+    constructor(IPoolManager _poolManager) AntiSandwichMock(_poolManager) {}
+}
+
+contract ProductionLimitOrderHook is LimitOrderHookMock {
+    constructor(IPoolManager _poolManager) LimitOrderHookMock(_poolManager) {}
+}
+
+contract ProductionLiquidityPenaltyHook is LiquidityPenaltyHookMock {
+    constructor(IPoolManager _poolManager) LiquidityPenaltyHookMock(_poolManager, 10) {}
+}
 
 /// @title A minimal, correct v4 hook
 /// @notice Counts swaps per pool. Observes only: no fees, no deltas, no admin.

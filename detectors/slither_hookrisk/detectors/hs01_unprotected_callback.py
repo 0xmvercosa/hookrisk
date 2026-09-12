@@ -104,7 +104,8 @@ dynamic fee, a reward accrual — is corrupted without a single token moving.
                             " but holds no reference to the PoolManager, so the "
                             "callback cannot be restricted to it and is callable "
                             "by anyone.\n",
-                        ]
+                        ],
+                        discriminator=callback.name,
                     )
                 )
             return results
@@ -122,7 +123,8 @@ dynamic fee, a reward accrual — is corrupted without a single token moving.
                         f"{readable}",
                         ". Anyone can call it with an arbitrary PoolKey and "
                         "arbitrary hookData.\n",
-                    ]
+                    ],
+                    discriminator=callback.name,
                 )
             )
         return results

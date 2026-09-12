@@ -24,6 +24,15 @@ new address. This is a liveness failure, not a theft risk, which is why it is
 reported as high impact rather than critical — and it is exactly the kind of bug
 that ships, because it is invisible until someone touches the pool.
 
+Not every unconditional revert is that bug. A hook that overrides the delegate
+in its own sources with `revert LiquidityNotAllowed()` has declared the
+permission *so that* the PoolManager routes there and gets refused: the WETH
+wrapper hook, v2-on-v4 and the constant-sum example all do this to force
+liquidity through their own entry points. That is a design decision, reported by
+`hookrisk-disabled-callback` as an informational classification, and this
+detector stays silent on it. See `classify_callback` in utils/hook_analysis.py
+for the exact rule.
+
 **Callback implemented, permission not declared.** The PoolManager never calls
 it. The code is dead: fee logic that never runs, an access check that never
 fires, a TWAP that never updates. The framework calls this out in §1.11,
@@ -49,9 +58,11 @@ from ..utils.hook_analysis import (
     FIELD_TO_FLAG,
     PERMISSION_FIELDS,
     RETURNS_DELTA_FIELDS,
+    CallbackStatus,
+    classify_callback,
     declared_permissions,
     implemented_callbacks,
-    is_effectually_implemented,
+    legacy_abi_evidence,
     resolve_override,
 )
 from ..utils.hooks_spec import CALLBACK_TO_FLAG, FLAG_BITS
@@ -127,19 +138,24 @@ constructor revert, or a failing unit test that does not route through a real po
             )
             return results
 
-        implemented = {
-            callback.name: callback
+        classified = {
+            callback.name: (callback, classify_callback(callback.function, contract))
             for callback in implemented_callbacks(contract)
-            if is_effectually_implemented(callback.function, contract)
         }
+        # A callback that exists under a pre-current signature is not a
+        # missing body; it is one this detector cannot read. The unsupported-ABI
+        # classification names it, and accusing it here would be wrong twice
+        # (wrong reason, wrong severity).
+        unreadable = set(legacy_abi_evidence(contract).mismatched_callbacks)
 
         for callback_name, field in _CALLBACK_TO_FIELD.items():
             is_declared = declared.get(field, False)
-            callback = implemented.get(callback_name)
+            callback, verdict = classified.get(callback_name, (None, None))
+            status = verdict.status if verdict is not None else CallbackStatus.STUB
             flag = CALLBACK_TO_FLAG[callback_name]
             bit = FLAG_BITS[flag]
 
-            if is_declared and callback is None:
+            if is_declared and status is CallbackStatus.STUB and callback_name not in unreadable:
                 results.append(
                     self._report(
                         [
@@ -149,10 +165,14 @@ constructor revert, or a failing unit test that does not route through a real po
                             "The PoolManager will call it on every matching pool "
                             "operation and the call will revert, making the pool "
                             "unusable for that operation.\n",
-                        ]
+                        ],
+                        discriminator=field,
                     )
                 )
-            elif not is_declared and callback is not None:
+            elif not is_declared and status is not CallbackStatus.STUB:
+                # An intentionally disabled callback counts as implemented here:
+                # the developer wrote a refusal and the PoolManager will never
+                # route to it, which is the opposite of what they intended.
                 results.append(
                     self._report(
                         [
@@ -161,7 +181,8 @@ constructor revert, or a failing unit test that does not route through a real po
                             "declared in getHookPermissions(). Unless the deployed "
                             f"address carries bit {bit} ({flag}), the PoolManager "
                             "never invokes it and this code is unreachable.\n",
-                        ]
+                        ],
+                        discriminator=field,
                     )
                 )
 
@@ -217,7 +238,8 @@ constructor revert, or a failing unit test that does not route through a real po
                             "Hooks.isValidHookAddress rejects this combination, so "
                             "no address satisfying these permissions can be used to "
                             "initialize a pool.\n",
-                        ]
+                        ],
+                        discriminator=field,
                     )
                 )
         return results

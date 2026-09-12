@@ -68,20 +68,33 @@ class HookriskDetector(AbstractDetector):
 
     # --- helpers -------------------------------------------------------------
 
-    def _report(self, parts: list) -> Output:
+    def _report(self, parts: list, discriminator: str | None = None) -> Output:
         """Build a Slither Output, tagging it with hookrisk metadata.
 
         The metadata rides along in the JSON and SARIF output so downstream
         consumers — the manifest writer above all — do not have to re-derive
         which dimension a finding feeds from its rule id.
+
+        `discriminator` tells apart findings of one rule class anchored on the
+        same element. HS-02 anchors "declared but not implemented" on the
+        contract, so a hook that declares two unimplemented permissions produces
+        two findings at the same location with the same class, and the CLI's
+        de-duplication — which exists so two *engines* reporting one defect are
+        not counted twice — collapsed them into one. Orbital lost its
+        `beforeAddLiquidity` finding that way. The discriminator (the permission
+        field, the callback name) makes the identity explicit instead of
+        leaving it to the message text.
         """
         output = self.generate_result(parts)
-        output.data["hookrisk"] = {
+        metadata: dict[str, object] = {
             "ruleClass": self.RULE_CLASS,
             "informsDimensions": list(self.INFORMS_DIMENSIONS),
             "informsTriggers": list(self.INFORMS_TRIGGERS),
             "isClassification": self.IS_CLASSIFICATION,
         }
+        if discriminator is not None:
+            metadata["discriminator"] = discriminator
+        output.data["hookrisk"] = metadata
         return output
 
 
