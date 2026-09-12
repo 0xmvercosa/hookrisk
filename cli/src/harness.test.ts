@@ -28,6 +28,7 @@ import {
   permissionsFrom,
   readArtifact,
   resolveProject,
+  summariseProbes,
   translate,
   unwrapRevert,
   type AbiInput,
@@ -651,6 +652,57 @@ describe('parseRunRecord', () => {
     assert.throws(() => parseRunRecord('{"flags": 1, "dynamicFee": false, "permissionsDerived": true, "seeded": "both"}'), /customCurve/);
     assert.throws(() => parseRunRecord('{"flags": -1, "customCurve": true, "dynamicFee": false, "permissionsDerived": true, "seeded": "both"}'), /flags/);
     assert.throws(() => parseRunRecord('not json'));
+  });
+
+  /** Verbatim from `EoaGuardProbeIsRight.test_runFileCarriesTheProbes` in HarnessValidation.t.sol. */
+  const WITH_PROBES =
+    '{"flags":192,"customCurve":false,"dynamicFee":false,"permissionsDerived":false,"seeded":"both","hookedSeedRevert":"",' +
+    '"probes":{"eoaGuard":{"beforeSwap":"guarded","afterSwap":"unguarded"},"exclusivity":"accepted","selectors":{"beforeSwap":"ok","afterSwap":"ok"}}}';
+
+  test('reads the probes object the harness writes, per callback', () => {
+    const record = parseRunRecord(WITH_PROBES);
+    assert.deepEqual(record.probes, {
+      eoaGuard: { beforeSwap: 'guarded', afterSwap: 'unguarded' },
+      exclusivity: 'accepted',
+      selectors: { beforeSwap: 'ok', afterSwap: 'ok' },
+    });
+  });
+
+  test('a record without probes is the pre-probe shape, not an error', () => {
+    const record = parseRunRecord('{"flags": 1, "customCurve": true, "dynamicFee": false, "permissionsDerived": true, "seeded": "both"}');
+    assert.equal(record.probes, undefined);
+  });
+
+  test('carries the exclusivity reason and the selector reverts when present', () => {
+    const record = parseRunRecord(
+      '{"flags":2184,"customCurve":true,"dynamicFee":false,"permissionsDerived":false,"seeded":"hooked-failed","hookedSeedRevert":"0x",' +
+        '"probes":{"eoaGuard":{"beforeAddLiquidity":"guarded","beforeSwap":"guarded"},"exclusivity":"not-applicable",' +
+        '"exclusivityReason":"a second pool with the same hook would not initialise: 0xebdb4fd9",' +
+        '"selectors":{"beforeAddLiquidity":"reverted","beforeSwap":"reverted"},"selectorReverts":{"beforeAddLiquidity":"0x2f5a2b6e","beforeSwap":"0x08c379a0"}}}',
+    );
+    assert.equal(record.probes?.exclusivityReason, 'a second pool with the same hook would not initialise: 0xebdb4fd9');
+    assert.deepEqual(record.probes?.selectorReverts, { beforeAddLiquidity: '0x2f5a2b6e', beforeSwap: '0x08c379a0' });
+  });
+
+  test('refuses a verdict, a callback name or a shape it does not know, so a new harness word cannot read as clean', () => {
+    const base = '{"flags":1,"customCurve":false,"dynamicFee":false,"permissionsDerived":false,"seeded":"both","hookedSeedRevert":"","probes":';
+    assert.throws(() => parseRunRecord(`${base}{"eoaGuard":{"beforeSwap":"maybe"},"exclusivity":"accepted","selectors":{}}}`), /probes\.eoaGuard\.beforeSwap is "maybe"/);
+    assert.throws(() => parseRunRecord(`${base}{"eoaGuard":{},"exclusivity":"unknown","selectors":{}}}`), /probes\.exclusivity is "unknown"/);
+    assert.throws(() => parseRunRecord(`${base}{"eoaGuard":{},"exclusivity":"accepted","selectors":{"beforeSwap":"fine"}}}`), /probes\.selectors\.beforeSwap is "fine"/);
+    assert.throws(() => parseRunRecord(`${base}{"eoaGuard":{"unlockCallback":"guarded"},"exclusivity":"accepted","selectors":{}}}`), /unknown callback "unlockCallback"/);
+    assert.throws(() => parseRunRecord(`${base}{"eoaGuard":[],"exclusivity":"accepted","selectors":{}}}`), /probes\.eoaGuard is \[\]/);
+    assert.throws(() => parseRunRecord(`${base}{"exclusivity":"accepted","selectors":{}}}`), /probes\.eoaGuard/);
+    assert.throws(() => parseRunRecord(`${base}{"eoaGuard":{},"exclusivity":"accepted","selectors":{},"selectorReverts":{"beforeSwap":"nothex"}}}`), /selectorReverts\.beforeSwap/);
+    assert.throws(() => parseRunRecord(`${base}"yes"}`), /probes is "yes"/);
+  });
+
+  test('summariseProbes leads with the bad news', () => {
+    const record = parseRunRecord(WITH_PROBES);
+    assert.equal(summariseProbes(record.probes!), 'unguarded: afterSwap; selectors ok; exclusivity accepted');
+    assert.equal(
+      summariseProbes({ eoaGuard: { beforeSwap: 'guarded' }, exclusivity: 'rejected', selectors: { beforeSwap: 'wrong-selector' } }),
+      'eoa guard held on 1 callback(s); selectors: beforeSwap=wrong-selector; exclusivity rejected',
+    );
   });
 });
 

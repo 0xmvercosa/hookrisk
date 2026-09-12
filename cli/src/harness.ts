@@ -451,6 +451,39 @@ async function castAbiEncode(signature: string, values: string[]): Promise<ExecR
 // Run record
 // --------------------------------------------------------------------------- //
 
+/**
+ * What the harness's execution probes found, one verdict per implemented
+ * callback (`harness/test/HookProbes.sol`). A callback the hook does not
+ * implement is absent, not `guarded`: the probe never called it.
+ */
+export interface HarnessProbes {
+  /**
+   * Called from an address that is not the PoolManager. `unguarded`: the call
+   * returned. `guarded`: it reverted with the hook's own error. `reverted-other`:
+   * it reverted with a v4-core error or a Panic, which is not evidence either way.
+   */
+  eoaGuard: Record<string, EoaGuardVerdict>;
+  /**
+   * A second pool with the same hook was initialised and the first swap-or-
+   * liquidity callback called as the PoolManager with that pool's key.
+   * `accepted` is a classification, never a defect: multi-pool hooks are normal.
+   */
+  exclusivity: ExclusivityVerdict;
+  /** Why `not-applicable`, when it is. */
+  exclusivityReason?: string;
+  /** Called as the PoolManager: did the first return word equal the callback's own selector? */
+  selectors: Record<string, SelectorVerdict>;
+  /** The unwrapped revert behind each `reverted` selector verdict, raw hex. */
+  selectorReverts?: Record<string, string>;
+}
+
+export const EOA_GUARD_VERDICTS = ['guarded', 'unguarded', 'reverted-other'] as const;
+export const EXCLUSIVITY_VERDICTS = ['rejected', 'accepted', 'not-applicable'] as const;
+export const SELECTOR_VERDICTS = ['ok', 'wrong-selector', 'reverted'] as const;
+export type EoaGuardVerdict = (typeof EOA_GUARD_VERDICTS)[number];
+export type ExclusivityVerdict = (typeof EXCLUSIVITY_VERDICTS)[number];
+export type SelectorVerdict = (typeof SELECTOR_VERDICTS)[number];
+
 /** What the harness reports about its own setUp, from `harness/out/hookrisk-run-<id>.json`. */
 export interface HarnessRunInfo {
   flags: number;
@@ -459,6 +492,8 @@ export interface HarnessRunInfo {
   permissionsDerived: boolean;
   seeded: 'both' | 'hooked-failed';
   hookedSeedRevert: string;
+  /** Absent when the harness that wrote the record predates the probes. */
+  probes?: HarnessProbes;
 }
 
 /** Parse and validate a run record. Throws on anything malformed, since a wrong `seeded` would silently change which invariants apply. */
@@ -478,7 +513,68 @@ export function parseRunRecord(text: string): HarnessRunInfo {
     permissionsDerived: raw.permissionsDerived as boolean,
     seeded,
     hookedSeedRevert: typeof raw.hookedSeedRevert === 'string' ? raw.hookedSeedRevert : '',
+    ...(raw.probes !== undefined ? { probes: parseProbes(raw.probes) } : {}),
   };
+}
+
+/**
+ * Strict on purpose: a verdict this reader does not know becomes a finding or
+ * the absence of one, so a harness that starts writing a new word must be met
+ * with a failure here, not with a silently clean report.
+ */
+function parseProbes(raw: unknown): HarnessProbes {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error(`probes is ${JSON.stringify(raw)}`);
+  const p = raw as Record<string, unknown>;
+  const exclusivity = p.exclusivity;
+  if (!(EXCLUSIVITY_VERDICTS as readonly unknown[]).includes(exclusivity)) {
+    throw new Error(`probes.exclusivity is ${JSON.stringify(exclusivity)}`);
+  }
+  const probes: HarnessProbes = {
+    eoaGuard: verdictMap('probes.eoaGuard', p.eoaGuard, EOA_GUARD_VERDICTS),
+    exclusivity: exclusivity as ExclusivityVerdict,
+    selectors: verdictMap('probes.selectors', p.selectors, SELECTOR_VERDICTS),
+  };
+  if (p.exclusivityReason !== undefined) {
+    if (typeof p.exclusivityReason !== 'string') throw new Error(`probes.exclusivityReason is ${JSON.stringify(p.exclusivityReason)}`);
+    probes.exclusivityReason = p.exclusivityReason;
+  }
+  if (p.selectorReverts !== undefined) {
+    if (typeof p.selectorReverts !== 'object' || p.selectorReverts === null) {
+      throw new Error(`probes.selectorReverts is ${JSON.stringify(p.selectorReverts)}`);
+    }
+    probes.selectorReverts = {};
+    for (const [name, value] of Object.entries(p.selectorReverts as Record<string, unknown>)) {
+      if (typeof value !== 'string' || !/^0x[0-9a-fA-F]*$/.test(value)) {
+        throw new Error(`probes.selectorReverts.${name} is ${JSON.stringify(value)}`);
+      }
+      probes.selectorReverts[name] = value;
+    }
+  }
+  return probes;
+}
+
+function verdictMap<V extends string>(field: string, raw: unknown, allowed: readonly V[]): Record<string, V> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error(`${field} is ${JSON.stringify(raw)}`);
+  const out: Record<string, V> = {};
+  const callbacks = new Set(Object.values(CALLBACK_SELECTORS));
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!callbacks.has(name)) throw new Error(`${field} names an unknown callback ${JSON.stringify(name)}`);
+    if (!(allowed as readonly unknown[]).includes(value)) throw new Error(`${field}.${name} is ${JSON.stringify(value)}`);
+    out[name] = value as V;
+  }
+  return out;
+}
+
+/** One line for the verbose log: what the probes found, worst news first. */
+export function summariseProbes(probes: HarnessProbes): string {
+  const unguarded = Object.entries(probes.eoaGuard).filter(([, v]) => v === 'unguarded').map(([n]) => n);
+  const bad = Object.entries(probes.selectors).filter(([, v]) => v !== 'ok').map(([n, v]) => `${n}=${v}`);
+  const parts = [
+    unguarded.length ? `unguarded: ${unguarded.join(', ')}` : `eoa guard held on ${Object.keys(probes.eoaGuard).length} callback(s)`,
+    bad.length ? `selectors: ${bad.join(', ')}` : 'selectors ok',
+    `exclusivity ${probes.exclusivity}`,
+  ];
+  return parts.join('; ');
 }
 
 // --------------------------------------------------------------------------- //
@@ -775,7 +871,8 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessOutcom
     `harness: ${translated.invariants.length} invariant(s), ${failures} failed` +
       (inconclusive ? `, ${inconclusive} inconclusive` : '') +
       (run ? ` (flags=0x${run.flags.toString(16)}${run.permissionsDerived ? ' derived' : ''}, seeded=${run.seeded}${run.dynamicFee ? ', dynamic fee' : ''})` : '') +
-      (observed ? ` observed ${summariseObservations(observed)}` : ''),
+      (observed ? ` observed ${summariseObservations(observed)}` : '') +
+      (run?.probes ? `; probes: ${summariseProbes(run.probes)}` : ''),
   );
 
   return finish(withEvidence({ status: 'ok', invariants: translated.invariants }), version);

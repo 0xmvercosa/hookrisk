@@ -190,4 +190,266 @@ describe('reconcileLayers', () => {
     reconcileLayers({ findings, invariants: invariants(), runRecord: HOOKED_FAILED });
     assert.equal(JSON.stringify({ findings, invariants: invariants() }), before);
   });
+
+  test('a harness-only finding is anchored on the target file, at the hook-profile line when there is one', () => {
+    const { findings } = reconcileLayers({
+      findings: [PROFILE],
+      invariants: invariants(),
+      runRecord: HOOKED_FAILED,
+      sourceFile: 'src/OrbitalHook.sol',
+    });
+    assert.deepEqual(findings.at(-1)!.location, { file: 'src/OrbitalHook.sol', line: 42 });
+
+    const noProfile = reconcileLayers({ findings: [], invariants: invariants(), runRecord: HOOKED_FAILED, sourceFile: 'src/OrbitalHook.sol' });
+    assert.deepEqual(noProfile.findings[0]!.location, { file: 'src/OrbitalHook.sol', line: 1 });
+  });
+});
+
+// --------------------------------------------------------------------------- //
+// Execution probes
+// --------------------------------------------------------------------------- //
+
+const PROFILE: Finding = {
+  id: 'id-profile',
+  ruleClass: 'hook-profile',
+  title: 'Counter: hook profile',
+  description: '',
+  severity: 'info',
+  confidence: 'high',
+  location: { file: 'src/OrbitalHook.sol', line: 42 },
+  evidence: [],
+  engines: [{ engine: 'hookrisk', nativeRule: 'hookrisk-hook-profile', severity: 'info', confidence: 'high' }],
+};
+
+const CLEAN: HarnessRunInfo = {
+  flags: 0xc0,
+  customCurve: false,
+  dynamicFee: false,
+  permissionsDerived: true,
+  seeded: 'both',
+  hookedSeedRevert: '',
+  probes: {
+    eoaGuard: { beforeSwap: 'guarded', afterSwap: 'guarded' },
+    exclusivity: 'rejected',
+    selectors: { beforeSwap: 'ok', afterSwap: 'ok' },
+  },
+};
+
+function withProbes(probes: Partial<NonNullable<HarnessRunInfo['probes']>>): HarnessRunInfo {
+  return { ...CLEAN, probes: { ...CLEAN.probes!, ...probes } };
+}
+
+describe('reconcileLayers: EOA-guard probe', () => {
+  test('unguarded on a callback HS-01 reports merges as a second attribution at confidence high', () => {
+    const hs01: Finding = { ...UNRELATED, function: { name: 'beforeSwap' }, discriminator: 'beforeSwap' };
+    const { findings, notes } = reconcileLayers({
+      findings: [hs01, PROFILE],
+      invariants: [],
+      runRecord: withProbes({ eoaGuard: { beforeSwap: 'unguarded', afterSwap: 'guarded' } }),
+      sourceFile: 'src/OrbitalHook.sol',
+    });
+    assert.equal(findings.length, 2, 'no new finding: HS-01 already names the callback');
+    const merged = findings.find((f) => f.id === 'id-hs01')!;
+    assert.deepEqual(
+      merged.engines.map((e) => [e.engine, e.nativeRule, e.confidence]),
+      [['hookrisk', 'hookrisk-unprotected-callback', 'medium'], ['harness', 'eoa-guard-probe', 'high']],
+    );
+    assert.equal(merged.confidence, 'high');
+    assert.match(merged.evidence.at(-1)!, /beforeSwap \(0x575e24b4\) was called from an address that is not the PoolManager/);
+    assert.match(merged.evidence.at(-1)!, /\[eoa-guard-probe\]/);
+    assert.equal(merged.location!.line, 200, 'the static location is kept');
+    assert.equal(notes.length, 1);
+    assert.match(notes[0]!, /merged into finding id-hs01/);
+  });
+
+  test('unguarded with no HS-01 adds a harness-sourced unprotected-hook-callback at medium confidence', () => {
+    const { findings, notes } = reconcileLayers({
+      findings: [PROFILE],
+      invariants: [],
+      runRecord: withProbes({ eoaGuard: { beforeSwap: 'guarded', afterSwap: 'unguarded' } }),
+      sourceFile: 'src/OrbitalHook.sol',
+    });
+    assert.equal(findings.length, 2);
+    const added = findings[1]!;
+    assert.equal(added.ruleClass, 'unprotected-hook-callback');
+    assert.equal(added.severity, 'high');
+    assert.equal(added.confidence, 'medium');
+    assert.deepEqual(added.location, { file: 'src/OrbitalHook.sol', line: 42 });
+    assert.deepEqual(added.function, { name: 'afterSwap', selector: '0xb47b2fb1' });
+    assert.equal(added.discriminator, 'afterSwap');
+    assert.deepEqual(added.engines, [{ engine: 'harness', nativeRule: 'eoa-guard-probe', severity: 'high', confidence: 'medium' }]);
+    assert.match(added.description, /established by execution alone/);
+    assert.equal(added.id.length, 16);
+    assert.equal(notes.length, 1);
+  });
+
+  test('guarded and reverted-other produce nothing, and HS-01 on a guarded callback is left as it was', () => {
+    const hs01: Finding = { ...UNRELATED, function: { name: 'beforeSwap' }, discriminator: 'beforeSwap' };
+    const { findings, notes } = reconcileLayers({
+      findings: [hs01],
+      invariants: [],
+      runRecord: withProbes({ eoaGuard: { beforeSwap: 'reverted-other', afterSwap: 'guarded' } }),
+      sourceFile: 'src/OrbitalHook.sol',
+    });
+    assert.deepEqual(findings, [hs01]);
+    assert.deepEqual(notes, []);
+  });
+
+  test('the merge does not add the attribution twice on a second pass', () => {
+    const hs01: Finding = { ...UNRELATED, function: { name: 'beforeSwap' }, discriminator: 'beforeSwap' };
+    const run = withProbes({ eoaGuard: { beforeSwap: 'unguarded' } });
+    const once = reconcileLayers({ findings: [hs01], invariants: [], runRecord: run });
+    const twice = reconcileLayers({ findings: once.findings, invariants: [], runRecord: run });
+    assert.equal(twice.findings[0]!.engines.length, 2);
+  });
+});
+
+describe('reconcileLayers: exclusivity probe', () => {
+  test('accepted becomes an INFO unvalidated-pool-key classification on the contract, informing no dimension', () => {
+    const { findings, notes } = reconcileLayers({
+      findings: [PROFILE],
+      invariants: [],
+      runRecord: withProbes({ exclusivity: 'accepted' }),
+      sourceFile: 'src/OrbitalHook.sol',
+    });
+    assert.equal(findings.length, 2);
+    const added = findings[1]!;
+    assert.equal(added.ruleClass, 'unvalidated-pool-key');
+    assert.equal(added.severity, 'info');
+    assert.equal(added.confidence, 'high');
+    assert.deepEqual(added.location, { file: 'src/OrbitalHook.sol', line: 42 });
+    assert.equal(added.function, undefined, 'anchored on the contract, not a callback');
+    assert.equal(added.informsDimensions, undefined);
+    assert.deepEqual(added.engines, [{ engine: 'harness', nativeRule: 'exclusivity-probe', severity: 'info', confidence: 'high' }]);
+    assert.match(added.evidence[0]!, /\[exclusivity-probe\]/);
+    assert.match(added.description, /classification/);
+    assert.equal(notes.length, 1);
+  });
+
+  test('rejected and not-applicable produce nothing', () => {
+    for (const exclusivity of ['rejected', 'not-applicable'] as const) {
+      const out = reconcileLayers({ findings: [], invariants: [], runRecord: withProbes({ exclusivity, exclusivityReason: 'x' }) });
+      assert.deepEqual(out.findings, []);
+      assert.deepEqual(out.notes, []);
+    }
+  });
+
+  test('the classification is not duplicated when one is already present', () => {
+    const run = withProbes({ exclusivity: 'accepted' });
+    const once = reconcileLayers({ findings: [], invariants: [], runRecord: run });
+    const twice = reconcileLayers({ findings: once.findings, invariants: [], runRecord: run });
+    assert.equal(twice.findings.length, 1);
+  });
+});
+
+describe('reconcileLayers: selector probe', () => {
+  test('wrong-selector is a HIGH callback-selector-mismatch at high confidence, per callback', () => {
+    const { findings, notes } = reconcileLayers({
+      findings: [PROFILE],
+      invariants: [],
+      runRecord: withProbes({ selectors: { beforeSwap: 'wrong-selector', afterSwap: 'ok' } }),
+      sourceFile: 'src/OrbitalHook.sol',
+    });
+    assert.equal(findings.length, 2);
+    const added = findings[1]!;
+    assert.equal(added.ruleClass, 'callback-selector-mismatch');
+    assert.equal(added.severity, 'high');
+    assert.equal(added.confidence, 'high');
+    assert.deepEqual(added.location, { file: 'src/OrbitalHook.sol', line: 42 });
+    assert.deepEqual(added.function, { name: 'beforeSwap', selector: '0x575e24b4' });
+    assert.equal(added.discriminator, 'beforeSwap');
+    assert.match(added.title, /returns the wrong selector; every swap through the pool reverts/);
+    assert.match(added.evidence[0]!, /InvalidHookResponse.*\[selector-probe\]/);
+    assert.deepEqual(added.engines, [{ engine: 'harness', nativeRule: 'selector-probe', severity: 'high', confidence: 'high' }]);
+    assert.equal(notes.length, 1);
+  });
+
+  test('reverted is HIGH at medium confidence and names the unwrapped revert from the record', () => {
+    const { findings } = reconcileLayers({
+      findings: [],
+      invariants: [],
+      runRecord: withProbes({
+        selectors: { beforeSwap: 'reverted', afterSwap: 'reverted' },
+        selectorReverts: { beforeSwap: SEED_REVERT, afterSwap: '0xebdb4fd9' },
+      }),
+      sourceFile: 'src/OrbitalHook.sol',
+    });
+    assert.equal(findings.length, 2);
+    const [before, after] = findings as [Finding, Finding];
+    assert.equal(before.confidence, 'medium');
+    assert.match(before.title, /beforeSwap reverts when the PoolManager calls it \(Error\("Use custom addLiquidity"\)\)/);
+    assert.match(before.evidence[0]!, /reverted when called as the PoolManager .*: Error\("Use custom addLiquidity"\) \[raw 0x08c379a0…\]/);
+    assert.match(before.description, /needs reserves of its own/);
+    assert.match(after.title, /custom error 0xebdb4fd9/);
+    assert.notEqual(before.id, after.id, 'one finding per callback');
+    assert.deepEqual(findings.map((f) => f.location), [{ file: 'src/OrbitalHook.sol', line: 1 }, { file: 'src/OrbitalHook.sol', line: 1 }]);
+  });
+
+  test('reverted without a recorded reason still reports, without inventing one', () => {
+    const { findings } = reconcileLayers({ findings: [], invariants: [], runRecord: withProbes({ selectors: { afterSwap: 'reverted' } }) });
+    assert.equal(findings[0]!.title, 'afterSwap reverts when the PoolManager calls it');
+    assert.equal(findings[0]!.location, null, 'no sourceFile, no location');
+  });
+
+  test('all ok produces nothing', () => {
+    const out = reconcileLayers({ findings: [PROFILE], invariants: invariants(), runRecord: CLEAN, sourceFile: 'src/OrbitalHook.sol' });
+    assert.deepEqual(out.findings, [PROFILE]);
+    assert.deepEqual(out.invariants, invariants());
+    assert.deepEqual(out.notes, []);
+  });
+});
+
+describe('reconcileLayers: probes and the seed revert together', () => {
+  test('the Orbital shape with probes: seed merged, exclusivity accepted, swap callback reverted', () => {
+    const { findings, invariants: out, notes } = reconcileLayers({
+      findings: [disabledFinding('beforeAddLiquidity', 325), PROFILE],
+      invariants: invariants(),
+      runRecord: {
+        ...HOOKED_FAILED,
+        probes: {
+          eoaGuard: { beforeAddLiquidity: 'guarded', beforeSwap: 'guarded' },
+          exclusivity: 'accepted',
+          selectors: { beforeAddLiquidity: 'reverted', beforeSwap: 'reverted' },
+          selectorReverts: { beforeAddLiquidity: SEED_REVERT, beforeSwap: '0xebdb4fd9' },
+        },
+      },
+      sourceFile: 'src/OrbitalHook.sol',
+    });
+    assert.deepEqual(
+      findings.map((f) => f.ruleClass),
+      ['callback-intentionally-disabled', 'hook-profile', 'unvalidated-pool-key', 'callback-selector-mismatch'],
+    );
+    assert.equal(findings[0]!.engines.length, 2, 'the seed merge still happens');
+    assert.equal(findings[3]!.function?.name, 'beforeSwap', 'only the swap callback is a selector finding');
+    assert.equal(out.find((i) => i.id === 'I3')!.status, 'not-applicable');
+    assert.equal(notes.length, 5);
+    assert.match(notes[3]!, /beforeAddLiquidity reverted under the selector probe, but finding id-beforeAddLiquidity classifies it as intentionally disabled/);
+  });
+
+  test('a reverted selector verdict on a callback the harness itself classified as disabled is not a second finding', () => {
+    const { findings } = reconcileLayers({
+      findings: [],
+      invariants: invariants(),
+      runRecord: {
+        ...HOOKED_FAILED,
+        probes: { eoaGuard: {}, exclusivity: 'not-applicable', selectors: { beforeAddLiquidity: 'reverted' } },
+      },
+    });
+    assert.deepEqual(findings.map((f) => f.ruleClass), ['callback-intentionally-disabled']);
+  });
+
+  test('a wrong-selector verdict is reported even on a disabled callback: a wrong answer is not a refusal', () => {
+    const { findings } = reconcileLayers({
+      findings: [disabledFinding('beforeAddLiquidity', 325)],
+      invariants: invariants(),
+      runRecord: { ...HOOKED_FAILED, probes: { eoaGuard: {}, exclusivity: 'not-applicable', selectors: { beforeAddLiquidity: 'wrong-selector' } } },
+    });
+    assert.deepEqual(findings.map((f) => f.ruleClass), ['callback-intentionally-disabled', 'callback-selector-mismatch']);
+  });
+
+  test('a record without probes changes nothing beyond the seed reconciliation', () => {
+    const out = reconcileLayers({ findings: [PROFILE], invariants: invariants(), runRecord: { ...HOOKED_FAILED, seeded: 'both' } });
+    assert.deepEqual(out.findings, [PROFILE]);
+    assert.deepEqual(out.notes, []);
+  });
 });

@@ -84,6 +84,10 @@ contract GenericHookInvariants is TwinPools {
 
         _setUpTwinPools(_specFromEnv(artifact));
         _seedTwins();
+        // Direct questions to each callback, before any sequence runs: the
+        // campaign only reaches a callback a swap or a position gets to, and
+        // several real hooks let neither land. See HookProbes.
+        _probeHook();
         // The hook's own permissions win over the CLI's static guess when the
         // harness derived them; `run` holds whichever applied.
         customCurve = run.customCurve;

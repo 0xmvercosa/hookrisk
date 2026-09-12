@@ -9,12 +9,18 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+
 import {TwinPools} from "./TwinPools.sol";
 import {TwinHandler} from "./TwinHandler.sol";
 import {RevertReason} from "./RevertReason.sol";
+import {HookProbes} from "./HookProbes.sol";
 import {SkimmingFeeHook} from "../src/hooks/FeeHooks.sol";
 import {TrappingHook} from "../src/hooks/TrappingHook.sol";
 import {DynamicFeeHook, LineCurveHook, ConfiguredHook} from "../src/hooks/ShapeHooks.sol";
+import {UnguardedCallbackHook} from "../src/hooks/ProbeHooks.sol";
 
 /// @title Tests that the tester works
 /// @notice A harness reporting "no problems found" means nothing until you have
@@ -576,5 +582,246 @@ contract RevertReasonUnwraps is Test {
             mstore(add(badOffset, add(0x20, 68)), 0xffff)
         }
         assertEq(RevertReason.rootCause(badOffset), badOffset);
+    }
+}
+
+// --------------------------------------------------------------------------- //
+// Execution probes — each callback asked directly, before any sequence runs
+// --------------------------------------------------------------------------- //
+
+/// @notice The EOA-guard probe must say `unguarded` on the callback with no
+/// caller check, `guarded` on the one beside it, and leave no trace behind.
+contract EoaGuardProbeIsRight is ValidationBase {
+    uint256 internal constant BEFORE_SWAP = 6;
+    uint256 internal constant AFTER_SWAP = 7;
+
+    function setUp() public {
+        _stand("ProbeHooks.sol:UnguardedCallbackHook", uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG));
+        _probeHook();
+    }
+
+    function test_unguardedCallbackIsNamedAndGuardedOneIsNot() public view {
+        assertTrue(run.probed);
+        assertEq(run.eoaGuard[AFTER_SWAP], "unguarded", "afterSwap has no caller check");
+        assertEq(run.eoaGuard[BEFORE_SWAP], "guarded", "beforeSwap checks msg.sender");
+        assertEq(run.eoaGuard[0], "", "a callback the hook does not implement is not probed");
+        assertEq(run.selectors[BEFORE_SWAP], "ok");
+        assertEq(run.selectors[AFTER_SWAP], "ok");
+    }
+
+    /// @notice The stranger's call *did* write state — that is what makes it
+    /// a finding — and the probe rolled it back, so the campaign starts clean.
+    function test_probesLeaveNoState() public {
+        assertEq(UnguardedCallbackHook(address(hook)).swapsSeen(), 0, "the probe's write must have been rolled back");
+        handler.swapExactIn(1e14, true);
+        assertFalse(handler.hookedSwapReverted(), "the pool must be usable after the probes");
+        assertEq(UnguardedCallbackHook(address(hook)).swapsSeen(), 1, "a real swap still reaches the hook");
+    }
+
+    function test_runFileCarriesTheProbes() public {
+        string memory path = "out/hookrisk-run-validation-probes.json";
+        _writeRunFile("validation-probes");
+        assertEq(
+            vm.readFile(path),
+            string.concat(
+                '{"flags":192,"customCurve":false,"dynamicFee":false,"permissionsDerived":false,"seeded":"both",',
+                '"hookedSeedRevert":"","probes":{"eoaGuard":{"beforeSwap":"guarded","afterSwap":"unguarded"},',
+                '"exclusivity":"accepted","selectors":{"beforeSwap":"ok","afterSwap":"ok"}}}'
+            )
+        );
+        vm.removeFile(path);
+    }
+}
+
+/// @notice The control: every BaseHook wrapper carries `onlyPoolManager`, so a
+/// hook built on it is `guarded` everywhere, and the probe must say so.
+contract EoaGuardProbeIsSilentOnBaseHook is ValidationBase {
+    function setUp() public {
+        _stand("FeeHooks.sol:HonestFeeHook", uint160(Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG));
+        _probeHook();
+    }
+
+    function test_everyImplementedCallbackIsGuarded() public view {
+        assertEq(run.eoaGuard[7], "guarded", "BaseHook's afterSwap rejects a stranger with NotPoolManager");
+        // A fee-taking afterSwap calls `take` on the manager, which only works
+        // inside an unlock: the probe supplies one, so this is `ok`, not
+        // `reverted` with ManagerLocked.
+        assertEq(run.selectors[7], "ok");
+        assertEq(run.selectorReverts[7].length, 0);
+    }
+}
+
+/// @notice The selector probe must name a callback that answers with the
+/// wrong selector before the campaign turns it into a wall of swap reverts.
+contract SelectorProbeIsRight is ValidationBase {
+    function setUp() public {
+        _stand("ProbeHooks.sol:WrongSelectorHook", uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.AFTER_SWAP_FLAG));
+        _probeHook();
+    }
+
+    function test_wrongSelectorIsNamedPerCallback() public view {
+        assertEq(run.selectors[6], "wrong-selector", "beforeSwap returns afterSwap's selector");
+        assertEq(run.selectors[7], "ok", "afterSwap is correct");
+        assertEq(run.eoaGuard[6], "guarded", "the guard still holds; the two verdicts are independent");
+        assertEq(run.selectorReverts[6].length, 0, "a wrong selector is a return, not a revert");
+    }
+
+    /// @notice What the PoolManager does with that answer, so the probe's
+    /// verdict and the campaign's symptom are tied together in one place.
+    function test_theManagerRejectsEverySwapOnThatHook() public {
+        handler.swapExactIn(1e14, true);
+        assertTrue(handler.hookedSwapReverted());
+        assertEq(bytes4(handler.hookedSwapRevertData()), Hooks.InvalidHookResponse.selector);
+    }
+}
+
+/// @notice A callback that reverts when the PoolManager calls it is
+/// `reverted`, with the hook's own reason kept; give the hook what it needs
+/// and the same callback is `ok`. The line-curve hook needs reserves.
+contract SelectorProbeRecordsTheRevert is ValidationBase {
+    function setUp() public {
+        _stand(
+            "ShapeHooks.sol:LineCurveHook",
+            uint160(Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG)
+        );
+    }
+
+    function test_withoutReservesTheSwapCallbackReverts() public {
+        _probeHook();
+        assertEq(run.selectors[6], "reverted", "settle has nothing to pay with");
+        assertGt(run.selectorReverts[6].length, 0, "the reason travels with the verdict");
+        assertEq(run.selectors[2], "reverted", "beforeAddLiquidity refuses by design; the probe reports what it saw");
+        assertEq(bytes4(run.selectorReverts[2]), LineCurveHook.LiquidityGoesThroughTheHook.selector);
+        assertEq(run.eoaGuard[6], "guarded");
+        // A revert on a foreign key would prove nothing when the same call
+        // reverts on the hook's own pool; the probe must decline, not accuse.
+        assertEq(run.exclusivity, "not-applicable");
+        assertEq(
+            run.exclusivityReason,
+            "every swap or liquidity callback reverts on the hook's own pool, so a revert on a foreign key would prove nothing"
+        );
+    }
+
+    function test_withReservesTheSameCallbackIsOk() public {
+        _fund(address(hook), 1e24);
+        _probeHook();
+        assertEq(run.selectors[6], "ok");
+        assertEq(run.selectorReverts[6].length, 0);
+        assertEq(run.exclusivity, "accepted", "the line curve prices any pool it is asked about");
+        // The hook priced the probe swap and moved tokens; all of it undone.
+        assertEq(
+            MockERC20(Currency.unwrap(currency0)).balanceOf(address(hook)), 1e24, "reserves untouched after rollback"
+        );
+    }
+}
+
+/// @notice The exclusivity probe: a hook that checks its pool key says no to
+/// a foreign one, a multi-pool hook says yes, and a hook with nothing to
+/// drive is `not-applicable` with the reason spelled out.
+contract ExclusivityProbeIsRight is ValidationBase {
+    using StateLibrary for IPoolManager;
+
+    function test_poolBoundHookRejectsAForeignKey() public {
+        _stand("ProbeHooks.sol:PoolBoundHook", uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG));
+        _probeHook();
+        assertEq(run.exclusivity, "rejected");
+        assertEq(run.exclusivityReason, "");
+        assertEq(run.selectors[6], "ok", "on its own pool the callback is fine");
+        assertEq(run.eoaGuard[1], "guarded");
+    }
+
+    /// @notice Legitimate, and reported as a classification: TrappingHook keeps
+    /// a counter per pool and serves whichever pool it is attached to.
+    function test_multiPoolHookAcceptsAForeignKey() public {
+        _stand("TrappingHook.sol:TrappingHook", uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG));
+        _probeHook();
+        assertEq(run.exclusivity, "accepted");
+        assertEq(run.exclusivityReason, "");
+    }
+
+    /// @notice The second pool the probe initialised must not survive it.
+    function test_theSecondPoolIsRolledBack() public {
+        _stand("TrappingHook.sol:TrappingHook", uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG));
+        _probeHook();
+        PoolKey memory second = PoolKey(currency0, currency1, hookedKey.fee, TICK_SPACING * 2, hook);
+        (uint160 sqrtPrice,,,) = manager.getSlot0(second.toId());
+        assertEq(sqrtPrice, 0, "the probe's second pool must not exist after the probe");
+        assertEq(TrappingHook(address(hook)).swapsSeen(hookedId), 0, "the probe's beforeSwap call was rolled back");
+        assertEq(TrappingHook(address(hook)).swapsSeen(second.toId()), 0);
+    }
+
+    function test_noDrivableCallbackIsNotApplicable() public {
+        _stand("ShapeHooks.sol:DynamicFeeHook", uint160(Hooks.AFTER_INITIALIZE_FLAG));
+        _probeHook();
+        assertEq(run.exclusivity, "not-applicable");
+        assertEq(run.exclusivityReason, "the hook implements no swap or liquidity callback the probe can drive");
+        assertEq(run.eoaGuard[1], "guarded");
+        assertEq(run.selectors[1], "ok", "afterInitialize sets the dynamic fee, which works from inside the unlock");
+    }
+
+    function test_runFileCarriesTheReason() public {
+        _stand("ShapeHooks.sol:DynamicFeeHook", uint160(Hooks.AFTER_INITIALIZE_FLAG));
+        _probeHook();
+        string memory path = "out/hookrisk-run-validation-exclusivity.json";
+        _writeRunFile("validation-exclusivity");
+        assertEq(
+            vm.readFile(path),
+            string.concat(
+                '{"flags":4096,"customCurve":false,"dynamicFee":true,"permissionsDerived":false,"seeded":"both",',
+                '"hookedSeedRevert":"","probes":{"eoaGuard":{"afterInitialize":"guarded"},',
+                '"exclusivity":"not-applicable","exclusivityReason":"the hook implements no swap or liquidity ',
+                'callback the probe can drive","selectors":{"afterInitialize":"ok"}}}'
+            )
+        );
+        vm.removeFile(path);
+    }
+}
+
+/// @notice The classification rules, pinned on their own so a change to the
+/// v4-core allowlist or to the Panic rule is a deliberate one.
+contract ProbeClassificationRules is Test {
+    HookProbes internal probes;
+
+    error MyOwnError();
+
+    function setUp() public {
+        probes = new HookProbes(IPoolManager(address(0)));
+    }
+
+    function _outcome(bool ok, bytes memory data) internal pure returns (HookProbes.Outcome memory) {
+        return HookProbes.Outcome({stage: 1, ok: ok, data: data});
+    }
+
+    function test_eoaGuardVerdicts() public view {
+        assertEq(probes.classifyEoaGuard(_outcome(true, abi.encode(IHooks.beforeSwap.selector))), "unguarded");
+        assertEq(probes.classifyEoaGuard(_outcome(false, abi.encodeWithSelector(MyOwnError.selector))), "guarded");
+        assertEq(probes.classifyEoaGuard(_outcome(false, abi.encodeWithSignature("Error(string)", "no"))), "guarded");
+        assertEq(probes.classifyEoaGuard(_outcome(false, "")), "guarded", "a bare require is still the hook refusing");
+        assertEq(
+            probes.classifyEoaGuard(_outcome(false, abi.encodeWithSelector(IPoolManager.ManagerLocked.selector))),
+            "reverted-other",
+            "a manager error is not the hook's guard"
+        );
+        assertEq(
+            probes.classifyEoaGuard(_outcome(false, abi.encodeWithSelector(Pool.PoolNotInitialized.selector))),
+            "reverted-other"
+        );
+        assertEq(
+            probes.classifyEoaGuard(_outcome(false, abi.encodeWithSignature("Panic(uint256)", 0x11))),
+            "reverted-other",
+            "an arithmetic panic says nothing about access control"
+        );
+    }
+
+    function test_selectorVerdicts() public view {
+        bytes4 expected = IHooks.beforeSwap.selector;
+        assertEq(probes.classifySelector(_outcome(true, abi.encode(expected, uint256(0), uint256(0))), expected), "ok");
+        assertEq(
+            probes.classifySelector(_outcome(true, abi.encode(IHooks.afterSwap.selector)), expected), "wrong-selector"
+        );
+        assertEq(probes.classifySelector(_outcome(true, ""), expected), "wrong-selector", "no return word at all");
+        assertEq(
+            probes.classifySelector(_outcome(false, abi.encodeWithSelector(MyOwnError.selector)), expected), "reverted"
+        );
     }
 }
