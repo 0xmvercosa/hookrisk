@@ -217,3 +217,176 @@ Exact changes in files I do not own.
    `maxTier = "medium"` gate fails the official template" is no longer true;
    and "a real complexity metric" is done on the scoring side, pending F's
    detector.
+
+
+---
+
+# Notes H, pass 4 — execution probes in the twin-pool harness
+
+Agent H, 2026-09-12. Owned: `harness/`, `cli/src/harness.ts` (+ test),
+`cli/src/reconcile.ts` (+ test), `docs/INVARIANTS.md`, this file.
+
+## What changed
+
+Three probes run once per scan, in `GenericHookInvariants.setUp` after the
+seed and before the handler exists, against every callback the deployed
+hook implements (permission bit set in the word the harness deployed under):
+
+| Probe | Question | Verdicts |
+|---|---|---|
+| `eoaGuard` | called from `0xBEEF`, does the callback reject a non-PoolManager caller? | `guarded` · `unguarded` · `reverted-other` |
+| `selectors` | called as the PoolManager, is the first return word its own selector? | `ok` · `wrong-selector` · `reverted` |
+| `exclusivity` | a second pool on the same hook (doubled tick spacing, dynamic-fee retry), first working swap-or-liquidity callback called with *that* key | `rejected` · `accepted` · `not-applicable` + `exclusivityReason` |
+
+Design points, each with a rationale comment in the code:
+
+- **Every probe runs inside `manager.unlock`, and the unlock always reverts**
+  (`harness/test/HookProbes.sol`). Callbacks call `take`/`settle`/
+  `updateDynamicLPFee`, which need the lock; called cold, a correct fee hook
+  reverts `ManagerLocked` and the probe would learn nothing. Inside the
+  unlock the call is realistic (it is exactly how Cork's attacker drove
+  `beforeSwap`), and ending `unlockCallback` with `revert ProbeOutcome(...)`
+  rolls back everything the hook did and carries the result out as the
+  revert reason. One unlock per hook call; no snapshot ids. Tests pin that
+  the stranger's state write and the second pool are both gone afterwards.
+- **`guarded` over-approximates on purpose.** Any revert whose selector is not
+  in an explicit v4-core error allowlist (plus `Panic`) counts as the hook's
+  own refusal. A false `guarded` loses a finding HS-01 still makes; a false
+  `unguarded` would accuse.
+- **Exclusivity only drives a callback whose selector verdict is `ok`.** First
+  real-world run said `rejected` for v4-constant-sum — because its
+  `beforeSwap` reverts on *every* key (no reserves). A revert on the wrong
+  key proves nothing when the same call reverts on the right one; now
+  `not-applicable` with that reason.
+- **The run record gains `probes`** (`TwinPools._probesJson`): only implemented
+  callbacks appear; `exclusivityReason` and `selectorReverts` (unwrapped
+  revert hex per `reverted` callback) only when present. Existing exact-JSON
+  tests are untouched because the object is written only after `_probeHook`.
+- **CLI parser is strict** (`parseProbes` in `harness.ts`): unknown verdict,
+  unknown callback name, wrong shape → the run record is malformed → harness
+  failure, never a clean read. `summariseProbes` adds one clause to the
+  verbose harness line.
+- **`reconcileLayers` maps the record** exactly per the shared contract, and
+  takes a new `sourceFile` input to anchor harness-sourced findings
+  (`{file, line: hook-profile line ?? 1}`); the existing seed-revert finding
+  now gets the same anchor when `sourceFile` is given. Two cross-layer rules
+  beyond the contract: a `reverted` selector verdict on a callback a
+  `callback-intentionally-disabled` finding names is suppressed with a note
+  (constant-sum's `beforeAddLiquidity` would otherwise be a HIGH for the
+  revert the classification just excused); `wrong-selector` is never
+  suppressed. Confidence: merge with HS-01 `high`; harness-only unguarded
+  `medium`; `wrong-selector` `high`; `reverted` `medium` with the revert in
+  the evidence.
+
+Fixtures (`harness/src/hooks/ProbeHooks.sol`): `UnguardedCallbackHook`
+(hand-rolled `IHooks`, guarded `beforeSwap`, unguarded state-writing
+`afterSwap`), `WrongSelectorHook` (`beforeSwap` returns `afterSwap`'s
+selector), `PoolBoundHook` (compares `key.toId()` to the first pool's).
+Controls: `HonestFeeHook` (all guarded, `take` inside the unlock is `ok`),
+`TrappingHook` (multi-pool → `accepted`), `LineCurveHook` (`reverted` without
+reserves, `ok` with them; exclusivity `not-applicable` then `accepted`),
+`DynamicFeeHook` (no drivable callback → `not-applicable`). Ten new harness
+test contracts / 15 tests in `HarnessValidation.t.sol`; 21 new CLI tests.
+
+Counts: harness 45 → 60 (1 skipped, unchanged); CLI 275 → 296; corpus gates
+3/3; detector tests 28/29 — see caveats.
+
+## How to demo
+
+```bash
+cd harness && FOUNDRY_PROFILE=scan forge test --match-contract 'Probe|EoaGuard|Selector|Exclusivity' -vv
+```
+
+Against a clone (worktree CLI, before the integrator wires the schema, read
+the invalid manifest):
+
+```bash
+cd <clones>/v4-template-counter/repo
+HOOKRISK_SLITHER_BIN=$HR/.venv/bin/slither node $HR/cli/dist/cli.js scan src/Counter.sol:Counter --verbose --out out
+#  harness: … probes: eoa guard held on 4 callback(s); selectors ok; exclusivity accepted
+#  reconcile: the hook accepted a callback for a second pool; added an unvalidated-pool-key classification
+jq '.findings[] | select(.ruleClass=="unvalidated-pool-key")' out/hook-risk.invalid.json
+```
+
+## Real-world results (built CLI, this branch)
+
+| Clone | probes line | reconcile |
+|---|---|---|
+| v4-template-counter (`Counter`) | eoa guard held on 4 callbacks; selectors ok; exclusivity **accepted** | `unvalidated-pool-key` INFO added (Counter validates nothing, as predicted) |
+| oz-limitorder-mock | eoa guard held on 2; selectors ok; exclusivity **accepted** | `unvalidated-pool-key` INFO |
+| v4-constant-sum (`Counter`) | eoa guard held on 2; selectors: `beforeAddLiquidity=reverted`, `beforeSwap=reverted`; exclusivity **not-applicable** | seed merge as before; `beforeAddLiquidity` revert suppressed (intentionally disabled); `beforeSwap` → `callback-selector-mismatch` HIGH/medium with `Panic(0x11)` in the evidence (no reserves: the hook underflows) |
+
+All three then fail HR-E501: `/findings/N/ruleClass must be equal to one of
+the allowed values` — the manifest schema's `ruleClass` enum does not carry
+the two new classes yet (integrator). The `probes` object is parsed but not
+copied into `permissions.harnessRun` (cli.ts picks fields; integrator).
+Harness-sourced findings have `location: null` until cli.ts passes
+`sourceFile` (integrator).
+
+## Caveats
+
+- `reverted` under the selector probe is HIGH per the contract but only
+  `medium` confidence, and on a reserve-less custom curve it is a
+  near-certain false positive (constant-sum above). The revert reason is in
+  the evidence. A better rule would downgrade to a classification when
+  `seeded: hooked-failed` **and** `customCurve` — I left it as the contract
+  says; agent T / the integrator may want to treat `confidence: medium`
+  selector findings as non-gating.
+- `guarded` cannot distinguish "rejected the caller" from "rejected the
+  arguments with the hook's own error before checking the caller".
+- Probe arguments are generic (no `hookData`, probe contract as `sender`,
+  small exact-input swap, ±6000 ticks). Hooks that need any of those show as
+  `reverted`/`reverted-other`.
+- `make test` on `feat/hackathon-p0` was already red before my changes:
+  `detectors/tests/test_corpus.py:322` expects "harness will observe reverts",
+  `disabled_callback.py:130` says "harness records such reverts when it
+  runs". Not my files; everything else (harness, CLI, three corpus gates,
+  28/29 detector tests) is green.
+- Runtime: probes add ~20 calls to `setUp`; the counter scan's harness phase
+  was unchanged to the second.
+
+## Integrator
+
+1. `cli/src/types.ts` (agent T): add `'unvalidated-pool-key'` and
+   `'callback-selector-mismatch'` to `RuleClass`; add `'unvalidated-pool-key'`
+   to `CLASSIFICATION_CLASSES`. Then drop the two `as RuleClass` casts at the
+   top of `cli/src/reconcile.ts` (`UNVALIDATED_POOL_KEY`, `SELECTOR_MISMATCH`).
+2. `schema/hook-risk.schema.json`: add both names to `findings[].ruleClass`
+   enum (and to any `nativeRule`/engine tables if present); otherwise every
+   scan with an accepted exclusivity fails HR-E501.
+3. `cli/src/cli.ts`, the `reconcileLayers` call: pass `sourceFile`:
+   ```ts
+   const reconciled = reconcileLayers({
+     findings,
+     invariants,
+     sourceFile,
+     ...(outcome?.run ? { runRecord: outcome.run } : {}),
+     ...(outcome?.observations ? { observations: outcome.observations } : {}),
+   });
+   ```
+4. `cli/src/cli.ts`, `permissionsSection.harnessRun`: carry the probes, and
+   add them to `schema/hook-risk.schema.json` `harnessRun.properties`:
+   ```ts
+   ...(outcome.run.probes ? { probes: outcome.run.probes } : {}),
+   ```
+   ```json
+   "probes": {
+     "type": "object", "additionalProperties": false,
+     "required": ["eoaGuard", "exclusivity", "selectors"],
+     "properties": {
+       "eoaGuard": {"type": "object", "additionalProperties": {"enum": ["guarded", "unguarded", "reverted-other"]}},
+       "exclusivity": {"enum": ["rejected", "accepted", "not-applicable"]},
+       "exclusivityReason": {"type": "string"},
+       "selectors": {"type": "object", "additionalProperties": {"enum": ["ok", "wrong-selector", "reverted"]}},
+       "selectorReverts": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^0x[0-9a-fA-F]*$"}}
+     }
+   }
+   ```
+5. `cli/src/manifest.ts` (report): optionally a "Probes" row under the
+   Dynamic analysis run table from `run.probes` — `summariseProbes` in
+   `harness.ts` gives the one-liner.
+6. `docs/DETECTORS.md` / `docs/SCORING.md`: mention that
+   `unvalidated-pool-key` is a classification (never scores) and that
+   `callback-selector-mismatch` is harness-sourced (engine `harness`, native
+   rule `selector-probe`), so `CLASS_COVERAGE` should not list a static engine
+   as responsible for it.

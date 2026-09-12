@@ -294,6 +294,110 @@ pools', so both were silently undone and `invariant_I2_hookDoesNotBlockSwaps`
 could never fire. They are now recorded after the rollback;
 `TrappingHookIsCaught` and `IdlePoolIsObservedAsIdle` pin it.
 
+## Execution probes: three questions the campaign cannot always ask
+
+The fuzz campaign reaches a callback only when a swap or a position lands on
+the hooked pool. Six of the fifteen real hooks the harness was pointed at let
+neither land — the hook refuses PoolManager liquidity and has no reserves of
+its own, so every hooked swap reverts — and their callbacks were never
+executed at all. Before the campaign, `setUp` therefore calls every
+implemented callback directly, three times, and records the answers in the
+run record under `probes`. Implemented means the corresponding bit is set in
+the permission word the harness deployed under: those are the callbacks the
+PoolManager would call.
+
+[`HookProbes.sol`](../harness/test/HookProbes.sol) · `TwinPools._probeHook`
+
+| Probe | The call | Verdicts |
+|---|---|---|
+| `eoaGuard` | each callback, from `0xBEEF` (not the PoolManager, no code), with well-formed arguments for the hooked pool | `guarded` it reverted with the hook's own error · `unguarded` it returned · `reverted-other` it reverted with a v4-core error or a `Panic` |
+| `selectors` | each callback, as the PoolManager, same arguments | `ok` the first return word is the callback's selector · `wrong-selector` it returned something else (or nothing) · `reverted` |
+| `exclusivity` | a second pool initialised with the same currencies and hook but doubled tick spacing (retrying with the dynamic-fee flag as `_initHookedPool` does), then the first implemented swap-or-liquidity callback as the PoolManager with *that* pool's key | `rejected` it reverted · `accepted` it returned · `not-applicable`, with `exclusivityReason` |
+
+The first two are the executed form of HS-01 and of the "wrong return type"
+class; the third has no static counterpart in hookrisk.
+
+### Every probe runs inside `unlock`, and the unlock always reverts
+
+A callback commonly calls back into the PoolManager — `take`, `settle`,
+`updateDynamicLPFee` — and each of those needs the manager unlocked. Called
+cold, a perfectly good fee-taking `afterSwap` reverts `ManagerLocked`, which
+says nothing about the hook. So the probe takes the lock itself: it calls
+`manager.unlock`, and the hook call is made from inside `unlockCallback`.
+That is also how an attacker drives an unguarded callback (Cork's `beforeSwap`
+was called from the attacker's own unlock callback), so the `eoaGuard` probe
+models the real threat rather than a cold call.
+
+Whatever the hook did in there — fees taken, counters bumped, a second pool
+initialised — must not leak into the campaign, and the probe must not have to
+settle what the hook took. The callback therefore ends by *reverting* with the
+outcome ABI-encoded as the reason (`ProbeOutcome(stage, ok, data)`); the
+PoolManager undoes everything and hands the reason back. One unlock per hook
+call, so every probe sees the same starting state, and the revert is the
+rollback. `EoaGuardProbeIsRight.test_probesLeaveNoState` and
+`ExclusivityProbeIsRight.test_theSecondPoolIsRolledBack` pin that.
+
+### What the verdicts do and do not mean
+
+- **`guarded` over-approximates.** Any revert that is not a v4-core error or a
+  `Panic` counts, so a hook that rejects the *arguments* with its own error
+  before checking the caller is also `guarded`. The probe cannot tell those
+  apart; a false `guarded` only loses a finding HS-01 still makes statically,
+  whereas a false `unguarded` would accuse, so the ambiguity is resolved in
+  the hook's favour. The v4-core allowlist is a list in `HookProbes.isV4Error`,
+  kept explicit so a v4-core bump that adds an error is a one-line diff.
+- **`reverted` under the selector probe is not proof of a defect.** The
+  arguments are well-formed but generic: no `hookData`, the probe contract as
+  `sender`, a small exact-input swap, a ±6000-tick position. A hook that
+  needs reserves of its own, a whitelisted router or encoded `hookData`
+  reverts for its own reasons. The unwrapped revert is recorded
+  (`selectorReverts`) so the report can say which; the CLI reports it at
+  `medium` confidence, and not at all for a callback a
+  `callback-intentionally-disabled` finding already names.
+- **`accepted` is a classification.** Multi-pool hooks are the norm
+  (`Counter`, every OpenZeppelin mock, `TrappingHook`). The point is to tell
+  the reader that anyone can attach a second pool with a different fee or
+  spacing to this hook, and the hook will serve it — a hook whose logic
+  assumes one pool must compare the key itself.
+- **Exclusivity needs a callback that works on the right pool.** Only a
+  callback whose selector verdict is `ok` is driven with the foreign key: a
+  revert on the wrong key proves nothing when the same call reverts on the
+  right one (a custom curve with no reserves reverts everywhere). With no
+  such callback the verdict is `not-applicable` and the reason says why;
+  likewise when no second pool can be initialised (a one-shot
+  `beforeInitialize`), with the hook's own revert as the reason.
+
+### Proving the probes detect
+
+| Hook | Planted answer | Test |
+|---|---|---|
+| `UnguardedCallbackHook` | `afterSwap` has no caller check and writes state; `beforeSwap` is guarded inline | `EoaGuardProbeIsRight` — `unguarded` / `guarded`, and the write rolled back |
+| `HonestFeeHook` (control) | BaseHook's `onlyPoolManager` on every wrapper; `afterSwap` calls `take` | `EoaGuardProbeIsSilentOnBaseHook` — `guarded`, selector `ok` from inside the unlock |
+| `WrongSelectorHook` | `beforeSwap` returns `afterSwap`'s selector | `SelectorProbeIsRight` — `wrong-selector`, and the PoolManager's `InvalidHookResponse` on a real swap |
+| `LineCurveHook` | `beforeSwap` reverts without reserves, works with them | `SelectorProbeRecordsTheRevert` — `reverted` with the reason, then `ok`; exclusivity `not-applicable` then `accepted` |
+| `PoolBoundHook` | compares `key.toId()` to the first pool's | `ExclusivityProbeIsRight` — `rejected`; `TrappingHook` — `accepted`; `DynamicFeeHook` — `not-applicable` |
+
+The classification rules themselves — the allowlist, the `Panic` rule, the
+short-return rule — are pinned in `ProbeClassificationRules`.
+
+### How the CLI reads them
+
+`reconcileLayers` (`cli/src/reconcile.ts`) maps the record to findings, with
+HS-01 as the static half, the same way the seed revert is joined with
+`callback-intentionally-disabled`:
+
+| Probe verdict | Finding |
+|---|---|
+| `eoaGuard: unguarded` on a callback HS-01 reports | that finding gains `harness` / `eoa-guard-probe`, confidence `high` |
+| `eoaGuard: unguarded`, no HS-01 | harness-sourced `unprotected-hook-callback`, HIGH, confidence `medium` |
+| `exclusivity: accepted` | INFO classification `unvalidated-pool-key` on the contract; informs no dimension |
+| `selectors: wrong-selector` | HIGH `callback-selector-mismatch` per callback, confidence `high` |
+| `selectors: reverted` | HIGH `callback-selector-mismatch` per callback, confidence `medium`, revert in the evidence; suppressed on a callback classified intentionally disabled |
+
+Harness-sourced findings are anchored on the target file, at the line of the
+static engine's `hook-profile` for it when there is one and line 1 otherwise:
+the harness executes bytecode and has no line of its own.
+
 ## The contract between the CLI and the harness
 
 Everything crosses the process boundary as environment variables in and one
@@ -316,15 +420,24 @@ At the **end** of a successful `setUp` the harness writes
 
 ```json
 {"flags": 2184, "customCurve": true, "dynamicFee": false,
- "permissionsDerived": true, "seeded": "hooked-failed", "hookedSeedRevert": "0x…"}
+ "permissionsDerived": true, "seeded": "hooked-failed", "hookedSeedRevert": "0x…",
+ "probes": {"eoaGuard": {"beforeAddLiquidity": "guarded", "beforeSwap": "guarded"},
+            "exclusivity": "not-applicable",
+            "exclusivityReason": "every swap or liquidity callback reverts on the hook's own pool, …",
+            "selectors": {"beforeAddLiquidity": "reverted", "beforeSwap": "reverted"},
+            "selectorReverts": {"beforeAddLiquidity": "0x08c379a0…", "beforeSwap": "0x4e487b71…"}}}
 ```
 
 `dynamicFee` means the hooked pool had to be initialised with
-`LPFeeLibrary.DYNAMIC_FEE_FLAG` because a static fee reverted. The CLI reads the
-record, deletes it, and copies it into the manifest under
-`permissions.harnessRun`. Its absence after a run whose permissions were to be
-derived is itself a failure: the invariants would otherwise be vouching for a
-configuration nobody can see.
+`LPFeeLibrary.DYNAMIC_FEE_FLAG` because a static fee reverted. `probes` holds
+the execution probes' verdicts (see above), one entry per implemented
+callback; `exclusivityReason` and `selectorReverts` appear only when they have
+something to say. The CLI's `parseRunRecord` refuses a verdict, callback name
+or shape it does not know, so a harness that starts writing a new word fails
+the run rather than reading as clean. The CLI reads the record, deletes it,
+and copies it into the manifest under `permissions.harnessRun`. Its absence
+after a run whose permissions were to be derived is itself a failure: the
+invariants would otherwise be vouching for a configuration nobody can see.
 
 After **every completed sequence**, `afterInvariant` appends one line to
 `harness/out/hookrisk-obs-<RUN_ID>.jsonl`:

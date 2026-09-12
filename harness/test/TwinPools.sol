@@ -13,6 +13,7 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 import {RevertReason} from "./RevertReason.sol";
+import {HookProbes} from "./HookProbes.sol";
 
 /// @dev The one function the harness needs from a hook it has never seen: the
 /// permissions it claims. Both OpenZeppelin's and v4-periphery's BaseHook
@@ -100,6 +101,18 @@ abstract contract TwinPools is Test, Deployers {
         bool permissionsDerived;
         bool hookedSeeded;
         bytes hookedSeedRevert;
+        /// @dev Set by `_probeHook`; the fields below are meaningful only then.
+        bool probed;
+        /// @dev Per callback, in `HookProbes.callbackNames()` order; empty for
+        /// a callback the hook does not implement.
+        string[10] eoaGuard;
+        string[10] selectors;
+        /// @dev The unwrapped revert behind a `reverted` selector verdict, so
+        /// the report can say *why* rather than only that it did.
+        bytes[10] selectorReverts;
+        string exclusivity;
+        /// @dev Why exclusivity is `not-applicable`, when it is.
+        string exclusivityReason;
     }
 
     IHooks internal hook;
@@ -109,6 +122,10 @@ abstract contract TwinPools is Test, Deployers {
     PoolId internal hookedId;
 
     HarnessRun internal run;
+
+    /// @dev The probe runner, deployed by `_probeHook`; kept so the run-file
+    /// writer can ask it for the callback names it classified under.
+    HookProbes internal probes;
 
     /// @dev The seed position both pools receive, so the twins start identical.
     int24 internal constant SEED_TICK_LOWER = -6000;
@@ -267,6 +284,107 @@ abstract contract TwinPools is Test, Deployers {
             run.hookedSeeded = false;
             run.hookedSeedRevert = RevertReason.rootCause(reason);
         }
+    }
+
+    // --- probes --------------------------------------------------------------
+
+    /// @notice Ask every implemented callback the three probe questions and
+    /// record the answers in `run`. See HookProbes for what each means.
+    ///
+    /// Runs after the seed so the hooked pool is in the state a callback
+    /// expects, and before the handler exists so nothing the probes do can be
+    /// mistaken for a sequence; every probe rolls its own effects back.
+    function _probeHook() internal {
+        probes = new HookProbes(manager);
+        uint160[10] memory flags = probes.callbackFlags();
+        bytes4[10] memory selectors = probes.callbackSelectors();
+
+        for (uint256 i = 0; i < 10; i++) {
+            if (run.flags & flags[i] == 0) continue;
+            bytes memory data = probes.callbackCalldata(i, hookedKey, address(probes));
+
+            HookProbes.Outcome memory stranger = probes.probe(_request(probes.STRANGER(), data));
+            run.eoaGuard[i] = probes.classifyEoaGuard(stranger);
+
+            HookProbes.Outcome memory asManager = probes.probe(_request(address(manager), data));
+            run.selectors[i] = probes.classifySelector(asManager, selectors[i]);
+            if (!asManager.ok) run.selectorReverts[i] = asManager.data;
+        }
+
+        _probeExclusivity(probes, flags);
+        run.probed = true;
+    }
+
+    /// @dev Initialise a second pool on the same hook, then drive the first
+    /// implemented swap-or-liquidity callback with *that* pool's key.
+    ///
+    /// Swap callbacks are tried first: a hook that keeps per-pool assumptions
+    /// is most likely to check them where the money moves. Only a callback
+    /// that *returned* for the hook's own pool under the selector probe is
+    /// eligible: a revert on a foreign key proves nothing about the key if
+    /// the same call reverts on the right one (a custom curve with no
+    /// reserves reverts everywhere). The second pool keeps the hooked pool's
+    /// fee and doubles the spacing; if the hook will not take that, the
+    /// dynamic-fee retry `_initHookedPool` uses is made too. A hook that lets
+    /// no second pool exist at all — a one-shot `beforeInitialize` — has
+    /// answered the question by other means, and is `not-applicable` with its
+    /// own revert as the reason.
+    function _probeExclusivity(HookProbes probes, uint160[10] memory flags) internal {
+        (uint256 index, bool anyDrivable) = _exclusivityCandidate(flags);
+        if (index == 10) {
+            run.exclusivity = "not-applicable";
+            run.exclusivityReason = anyDrivable
+                ? "every swap or liquidity callback reverts on the hook's own pool, so a revert on a foreign key would prove nothing"
+                : "the hook implements no swap or liquidity callback the probe can drive";
+            return;
+        }
+
+        uint24[2] memory fees = [hookedKey.fee, LPFeeLibrary.DYNAMIC_FEE_FLAG];
+        uint256 attempts = hookedKey.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG ? 1 : 2;
+        bytes memory lastInitRevert;
+        for (uint256 a = 0; a < attempts; a++) {
+            HookProbes.Outcome memory outcome = _probeSecondPool(probes, index, fees[a]);
+            if (outcome.stage == 0) {
+                lastInitRevert = outcome.data;
+                continue;
+            }
+            run.exclusivity = outcome.ok ? "accepted" : "rejected";
+            return;
+        }
+        run.exclusivity = "not-applicable";
+        run.exclusivityReason =
+            string.concat("a second pool with the same hook would not initialise: ", vm.toString(lastInitRevert));
+    }
+
+    /// @dev The first implemented swap-or-liquidity callback that returned
+    /// for the hook's own pool; 10 when there is none. `anyDrivable` tells
+    /// "none implemented" apart from "all of them revert".
+    function _exclusivityCandidate(uint160[10] memory flags) internal view returns (uint256 index, bool anyDrivable) {
+        uint256[6] memory order = [uint256(6), 7, 2, 3, 4, 5];
+        index = 10;
+        for (uint256 i = 0; i < order.length; i++) {
+            if (run.flags & flags[order[i]] == 0) continue;
+            anyDrivable = true;
+            if (keccak256(bytes(run.selectors[order[i]])) == keccak256("ok")) return (order[i], true);
+        }
+    }
+
+    /// @dev One unlock: initialise a second pool at `fee` with doubled
+    /// spacing, then call callback `index` as the manager with its key.
+    function _probeSecondPool(HookProbes probes, uint256 index, uint24 fee)
+        internal
+        returns (HookProbes.Outcome memory)
+    {
+        PoolKey memory second = PoolKey(currency0, currency1, fee, TICK_SPACING * 2, hook);
+        HookProbes.Request memory request =
+            _request(address(manager), probes.callbackCalldata(index, second, address(probes)));
+        request.init = true;
+        request.initKey = second;
+        return probes.probe(request);
+    }
+
+    function _request(address caller, bytes memory data) internal view returns (HookProbes.Request memory) {
+        return HookProbes.Request({hook: address(hook), caller: caller, call: data, init: false, initKey: hookedKey});
     }
 
     // --- permissions ---------------------------------------------------------
@@ -435,9 +553,53 @@ abstract contract TwinPools is Test, Deployers {
             run.hookedSeeded ? "both" : "hooked-failed",
             '","hookedSeedRevert":"',
             run.hookedSeedRevert.length == 0 ? "" : vm.toString(run.hookedSeedRevert),
-            '"}'
+            '"',
+            run.probed ? string.concat(',"probes":', _probesJson()) : "",
+            "}"
         );
         vm.writeFile(string.concat("out/hookrisk-run-", runId, ".json"), json);
+    }
+
+    /// @dev The `probes` object of the run record. Only implemented callbacks
+    /// appear, so the CLI can read "absent" as "not called" rather than as a
+    /// verdict. `selectorReverts` and `exclusivityReason` are present only
+    /// when they have something to say.
+    function _probesJson() internal view returns (string memory) {
+        string[10] memory names = probes.callbackNames();
+        string memory eoa = "";
+        string memory sel = "";
+        string memory reverts = "";
+        for (uint256 i = 0; i < 10; i++) {
+            if (bytes(run.eoaGuard[i]).length == 0) continue;
+            eoa = string.concat(eoa, bytes(eoa).length == 0 ? "" : ",", '"', names[i], '":"', run.eoaGuard[i], '"');
+            sel = string.concat(sel, bytes(sel).length == 0 ? "" : ",", '"', names[i], '":"', run.selectors[i], '"');
+            if (run.selectorReverts[i].length > 0) {
+                reverts = string.concat(
+                    reverts,
+                    bytes(reverts).length == 0 ? "" : ",",
+                    '"',
+                    names[i],
+                    '":"',
+                    vm.toString(run.selectorReverts[i]),
+                    '"'
+                );
+            }
+        }
+        return string.concat(
+            '{"eoaGuard":{',
+            eoa,
+            '},"exclusivity":"',
+            run.exclusivity,
+            '"',
+            bytes(run.exclusivityReason).length == 0
+                ? ""
+                : string.concat(',"exclusivityReason":"', run.exclusivityReason, '"'),
+            ',"selectors":{',
+            sel,
+            "}",
+            bytes(reverts).length == 0 ? "" : string.concat(',"selectorReverts":{', reverts, "}"),
+            "}"
+        );
     }
 
     /// @notice Append one sequence's observations to `out/hookrisk-obs-<runId>.jsonl`.
