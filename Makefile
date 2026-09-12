@@ -19,7 +19,7 @@ PYTHON    = $(shell [ -x $(VENV)/bin/python ] && echo $(VENV)/bin/python || echo
 PIP       = $(shell [ -x $(VENV)/bin/pip ] && echo $(VENV)/bin/pip || echo pip3)
 SLITHER   = $(shell [ -x $(VENV)/bin/slither ] && echo $(VENV)/bin/slither || echo slither)
 
-DETECTOR_ARGS := hookrisk-unprotected-callback,hookrisk-flag-divergence,hookrisk-custom-accounting,hookrisk-disabled-callback,hookrisk-unsupported-abi
+DETECTOR_ARGS := hookrisk-unprotected-callback,hookrisk-flag-divergence,hookrisk-custom-accounting,hookrisk-disabled-callback,hookrisk-unsupported-abi,hookrisk-hook-profile
 
 .PHONY: help
 help: ## Show this help
@@ -108,7 +108,11 @@ test-cli: ## TypeScript: engines, scoring, config
 #           IntentionalRevertHook is *meant* to trip `hookrisk-disabled-callback`.
 #   legacy  must produce unsupported-ABI classifications and nothing else — the
 #           point of the fixture is that the scan admits it did not look,
-#           without inventing findings it could not have derived.
+#           without inventing findings it could not have derived. The one
+#           other thing allowed is a hook-profile on the partially readable
+#           MixedAbiHook: its current-ABI callbacks *were* analysed, and the
+#           profile says so (its `partial` unsupported-ABI twin still revokes
+#           coverage in the CLI).
 #
 # `--fail-none` so Slither's exit code reflects "did the scan run", not "were
 # there findings"; the pipeline then checks `.success` so a compile failure is
@@ -128,8 +132,8 @@ test-corpus: ## Detectors must fire on corpus/src/bad, stay silent on src/good, 
 	@echo "--- corpus/src/good (nothing at High or Medium, no unsupported-ABI) ---"
 	@$(call CORPUS_SCAN,src/good) | jq -e '.success and (($(JQ_SEVERE)) == 0) and ([.results.detectors[] | select(.check == "hookrisk-unsupported-abi")] | length == 0)' >/dev/null \
 		|| { echo "FAIL: false positive on the negative corpus"; exit 1; }
-	@echo "--- corpus/src/legacy (only unsupported-abi) ---"
-	@$(call CORPUS_SCAN,src/legacy) | jq -e '.success and (.results.detectors | length > 0) and all(.results.detectors[]; .check == "hookrisk-unsupported-abi")' >/dev/null \
+	@echo "--- corpus/src/legacy (only unsupported-abi, plus the partial hook's profile) ---"
+	@$(call CORPUS_SCAN,src/legacy) | jq -e '.success and ([.results.detectors[] | select(.check == "hookrisk-unsupported-abi")] | length > 0) and all(.results.detectors[]; .check == "hookrisk-unsupported-abi" or .check == "hookrisk-hook-profile")' >/dev/null \
 		|| { echo "FAIL: legacy corpus must produce unsupported-ABI classifications and nothing else"; exit 1; }
 	@echo "--- detectors/tests (finding-level expectations) ---"
 	@cd detectors && HOOKRISK_SLITHER_BIN=$(abspath $(SLITHER)) $(abspath $(PYTHON)) -m unittest discover -s tests -v \

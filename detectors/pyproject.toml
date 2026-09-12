@@ -60,10 +60,9 @@ hookrisk = "slither_hookrisk.plugin:make_plugin"
 [tool.setuptools.packages.find]
 include = ["slither_hookrisk*"]
 
-# The error catalogue is copied here by `make build-detectors` so an installed
-# wheel is self-contained rather than depending on a source checkout.
-[tool.setuptools.package-data]
-slither_hookrisk = ["data/*.json"]
+# No package data. The error catalogue (errors/catalog.json) is the CLI's:
+# the plugin reports findings and leaves failure classification to the
+# process that reads them, so nothing has to be copied in at build time.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

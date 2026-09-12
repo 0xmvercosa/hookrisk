@@ -17,6 +17,7 @@ exists precisely for the contracts that scoping excludes.
 | [HS-07](#hs-07) | Custom accounting in use | Info | ✅ |
 | [disabled-callback](#disabled-callback) | Callback refused by design | Info | ✅ |
 | [unsupported-abi](#unsupported-abi) | Hook on an interface hookrisk cannot read | Info | ✅ |
+| [hook-profile](#hook-profile) | Per-contract profile: permissions, callbacks, complexity metrics | Info | ✅ |
 | [HS-03](#not-yet-implemented) | Admin surface | — | ✖ |
 | [HS-04](#not-yet-implemented) | Upgradeability | — | ✖ (covered by BlockSec) |
 | [HS-05](#not-yet-implemented) | External call in swap path | — | ✖ |
@@ -262,6 +263,93 @@ callbacks nothing could judge.
 
 ---
 
+<a id="hook-profile"></a>
+## Hook profile
+
+`hookrisk-hook-profile` · rule class `hook-profile` · **classification, not a defect**
+
+One informational finding per contract the detectors recognised as a hook,
+anchored on the contract. It exists because Slither's JSON carries findings and
+nothing else: a clean scan and a scan that never recognised the target produce
+the same empty list. Until this detector the CLI inferred coverage from the
+*absence* of an [unsupported-ABI](#unsupported-abi) disclaimer — inference from
+silence, the failure the scoring layer refuses everywhere else. Now the plugin
+says what it looked at, and the CLI marks the target analysed only when a
+profile exists for that file and contract name.
+
+The block it carries (see [the engine contract](#the-engine-contract)):
+
+| Field | Meaning |
+|---|---|
+| `permissions` | The resolved `getHookPermissions()` set, inheritance followed, all fourteen fields. Absent when the hook declares none. This is where the CLI takes permissions from; the harness's runtime derivation is the fallback for when static analysis did not run. |
+| `callbacks` | Callbacks whose most-derived delegate does work. A `BaseHook` stub is nobody's code and a deliberate revert-guard ([disabled-callback](#disabled-callback)) is not a path the PoolManager can complete, so neither is listed. |
+| `metrics.callbacksImplemented` | `len(callbacks)`. |
+| `metrics.callbacksDeclared` | Callback permissions set to true. Returns-delta flags are not callbacks and are not counted. |
+| `metrics.stateWritesInCallbacks` | State-variable writes reachable from the implemented callbacks through internal calls and modifiers, after override resolution, one per (node, variable). Inherited library logic counts: a limit-order book that keeps its state in `lib/` still mutates it on every swap. |
+| `metrics.externalCallsInSwapPath` | High- and low-level calls from `beforeSwap`/`afterSwap` and everything they reach. Library calls excluded. The HS-05 input. |
+| `metrics.internalFunctionsReachableFromCallbacks` | Distinct implemented functions (modifiers excluded) reachable from the implemented callbacks. |
+| `metrics.usesReturnsDelta` | Any returns-delta permission declared. |
+| `metrics.hasOwnerOnlyFunctions` | Some external/public, non-view, non-callback function compares `msg.sender` against an owner-like state variable — `require(msg.sender == admin)` inline, or OpenZeppelin's `onlyOwner` → `_checkOwner()` → `owner() != _msgSender()`, whose operands are resolved through the callees. The HS-03 input. |
+
+The complexity dimension is *derived* from these metrics by the scoring layer,
+with brackets recorded in `schema/framework-rubric.json` as an interpretation.
+The profile never sets a value itself; a target without one leaves complexity
+unmeasured.
+
+### What it measured on real hooks
+
+| Hook | callbacks | declared | state writes | ext. calls in swap | reachable | returns-delta | owner-only |
+|---|---|---|---|---|---|---|---|
+| v4-template `Counter` | 4 | 4 | 4 | 0 | 4 | no | no |
+| `CorkHook` (the exploit) | 2 | 4 | 4 | 5 | 19 | yes | yes |
+| OZ `LimitOrderHookMock` | 2 | 2 | 6 | 3 | 9 | no | no |
+| OZ `AntiSandwichMock` | 2 | 2 | 6 | 2 | 9 | yes | no |
+
+### Known trade-offs
+
+- `hasOwnerOnlyFunctions` recognises comparisons, not role lookups.
+  `AccessControl`'s `hasRole(role, msg.sender)` is a mapping read followed by a
+  boolean branch with no `==`, and is not detected. Owner-like variables are
+  found by name (`owner`, `admin`, `governance`, `guardian`, …), which is the
+  weak direction on purpose: a miss costs one false "no admin surface", a hit
+  scores nothing by itself.
+- Writes through a storage pointer (`Checkpoint storage c = _checkpoints[id];
+  c.blockNumber = …`) are recorded by Slither against the local reference,
+  not the state variable, and are under-counted.
+- A same-named contract in another file is not the target. The profile's
+  anchor carries `filename_relative`, and the CLI matches both.
+
+[`hook_profile.py`](../detectors/slither_hookrisk/detectors/hook_profile.py) ·
+[`hook_analysis.py`](../detectors/slither_hookrisk/utils/hook_analysis.py) ·
+`state_writes_in`, `owner_only_functions`, `reachable_functions`
+
+---
+
+<a id="the-engine-contract"></a>
+## The engine contract
+
+Every result a hookrisk detector emits carries a `hookrisk` block, written by
+`HookriskDetector._report` and shaped by
+[`schema/engine-metadata.schema.json`](../schema/engine-metadata.schema.json):
+
+```json
+{ "version": "1", "ruleClass": "…", "informsDimensions": [], "informsTriggers": [],
+  "isClassification": false, "discriminator": "…",
+  "metrics": {}, "permissions": {}, "callbacks": [] }
+```
+
+It is enforced from both sides. `detectors/tests` validates every block the
+corpus produces with a stdlib checker for the subset of JSON Schema the file
+uses (and fails if the schema grows a keyword the checker does not know). The
+CLI validates with Ajv before admitting a result, and a block that does not
+conform is **dropped with a log line naming the detector and the violated
+path**, the count recorded as `engines[].invalidMetadata`. A drifted detector
+therefore cannot put an unattributable row in the report, nor disappear from it
+in silence. `version` is bumped only when a consumer would have to change to
+keep reading the block correctly.
+
+---
+
 <a id="not-yet-implemented"></a>
 ## Not yet implemented
 
@@ -270,9 +358,9 @@ dimension unmeasurable and that consequence should be legible.
 
 | Rule | Would find | Dimension left unmeasured |
 |---|---|---|
-| **HS-03** | Privileged surface: fee setters, pause, sweep; whether an EOA or a contract controls it | `complexity`, refines `upgradeability` |
+| **HS-03** | Privileged surface: fee setters, pause, sweep; whether an EOA or a contract controls it | `complexity`, refines `upgradeability` — the [profile](#hook-profile)'s `hasOwnerOnlyFunctions` is the first input |
 | **HS-04** | DELEGATECALL to mutable code, EIP-1967 slots, `upgradeTo` | `upgradeability` — **unless BlockSec runs** |
-| **HS-05** | Calls inside before/afterSwap to anything but the PoolManager and the pair's tokens | `externalDependencies` |
+| **HS-05** | Calls inside before/afterSwap to anything but the PoolManager and the pair's tokens | `externalDependencies` — the [profile](#hook-profile)'s `externalCallsInSwapPath` counts them, without yet judging the destination |
 | **HS-06** | Dynamic fee with no ceiling, no rate limit, or the wrong controller | refines `priceImpactingBehavior` |
 | **HS-08** | Rounding that resolves in the caller's favour on an exit path | refines `customMath` |
 

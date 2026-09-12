@@ -60,6 +60,7 @@ const CLASS_COVERAGE: Record<RuleClass, string[]> = {
   'rounding-direction': ['hookrisk'],
   'callback-intentionally-disabled': ['hookrisk'],
   'unsupported-hook-abi': ['hookrisk'],
+  'hook-profile': ['hookrisk'],
 };
 
 /**

@@ -68,12 +68,30 @@ class HookriskDetector(AbstractDetector):
 
     # --- helpers -------------------------------------------------------------
 
-    def _report(self, parts: list, discriminator: str | None = None) -> Output:
+    #: Version of the `hookrisk` metadata block. Bumped when a consumer would
+    #: have to change to keep reading it correctly; adding an optional field is
+    #: not a bump. The shape is schema/engine-metadata.schema.json, and the CLI
+    #: rejects a block it cannot validate rather than guessing at it.
+    METADATA_VERSION: ClassVar[str] = "1"
+
+    def _report(
+        self,
+        parts: list,
+        discriminator: str | None = None,
+        *,
+        metrics: dict[str, int | bool] | None = None,
+        permissions: dict[str, bool] | None = None,
+        callbacks: Sequence[str] | None = None,
+    ) -> Output:
         """Build a Slither Output, tagging it with hookrisk metadata.
 
         The metadata rides along in the JSON and SARIF output so downstream
         consumers — the manifest writer above all — do not have to re-derive
-        which dimension a finding feeds from its rule id.
+        which dimension a finding feeds from its rule id. Its shape is a
+        versioned contract (schema/engine-metadata.schema.json): the CLI
+        validates every block and drops, with a log line naming the detector,
+        any that does not conform. detectors/tests validates the same schema
+        from this side, so drift is caught before it reaches a report.
 
         `discriminator` tells apart findings of one rule class anchored on the
         same element. HS-02 anchors "declared but not implemented" on the
@@ -84,9 +102,15 @@ class HookriskDetector(AbstractDetector):
         `beforeAddLiquidity` finding that way. The discriminator (the permission
         field, the callback name) makes the identity explicit instead of
         leaving it to the message text.
+
+        `metrics`, `permissions` and `callbacks` are the hook-profile payload:
+        per-contract measurements, the resolved permission set and the
+        implemented callback names. They are optional at this level so every
+        detector shares one writer, but only a classification should send them.
         """
         output = self.generate_result(parts)
         metadata: dict[str, object] = {
+            "version": self.METADATA_VERSION,
             "ruleClass": self.RULE_CLASS,
             "informsDimensions": list(self.INFORMS_DIMENSIONS),
             "informsTriggers": list(self.INFORMS_TRIGGERS),
@@ -94,6 +118,12 @@ class HookriskDetector(AbstractDetector):
         }
         if discriminator is not None:
             metadata["discriminator"] = discriminator
+        if metrics is not None:
+            metadata["metrics"] = dict(metrics)
+        if permissions is not None:
+            metadata["permissions"] = dict(permissions)
+        if callbacks is not None:
+            metadata["callbacks"] = list(callbacks)
         output.data["hookrisk"] = metadata
         return output
 

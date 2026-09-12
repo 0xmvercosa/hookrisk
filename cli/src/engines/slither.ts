@@ -30,12 +30,32 @@
  * *found* something. Only a missing or unparseable report is a failure, and a
  * failure always carries a reason: classified against the error catalogue when
  * the output matches an entry, the last lines of output when it does not.
+ *
+ * **It enforces the engine contract.** The `hookrisk` block on every result is
+ * validated against `schema/engine-metadata.schema.json` before the result is
+ * admitted. A block that does not conform is dropped with a log line naming
+ * the detector, and the count lands in `EngineResult.invalidMetadata`, so a
+ * detector that drifts from the contract cannot put an unattributable row in
+ * the report — nor vanish from it without trace.
+ *
+ * **It takes coverage from a positive signal.** The plugin emits one
+ * `hook-profile` per contract it recognised as a hook. The target counts as
+ * analysed only when such a profile exists for its file and contract name; the
+ * profile is also where the CLI gets the resolved permission set. Coverage used
+ * to be inferred from the *absence* of an unsupported-ABI disclaimer, which is
+ * inference from silence — the failure the scoring layer refuses everywhere
+ * else.
  */
 
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// The 2020 build, as in manifest.ts: the schema declares draft 2020-12 and
+// Ajv's default entry point only understands draft-07.
+import { Ajv2020 as Ajv, type ValidateFunction } from 'ajv/dist/2020.js';
 
 import { describeFailure } from '../errors.js';
 import type {
@@ -79,21 +99,38 @@ export interface SlitherElement {
   type_specific_fields?: Record<string, unknown>;
 }
 
+/**
+ * The `hookrisk` block, version 1. The authoritative shape is
+ * schema/engine-metadata.schema.json; this type mirrors it for the code that
+ * runs after validation.
+ */
+export interface EngineMetadata {
+  version: '1';
+  ruleClass: RuleClass;
+  informsDimensions: string[];
+  informsTriggers: string[];
+  isClassification: boolean;
+  /** See `Finding.discriminator`. */
+  discriminator?: string;
+  /** Only on `hook-profile`. */
+  metrics?: Record<string, number | boolean>;
+  /** Only on `hook-profile`, and only when the hook declares permissions. */
+  permissions?: Record<string, boolean>;
+  /** Only on `hook-profile`: the implemented callback names. */
+  callbacks?: string[];
+}
+
 export interface SlitherDetectorResult {
   check: string;
   impact: string;
   confidence: string;
   description: string;
   elements: SlitherElement[];
-  /** Injected by HookriskDetector._report. */
-  hookrisk?: {
-    ruleClass: RuleClass;
-    informsDimensions: string[];
-    informsTriggers: string[];
-    isClassification: boolean;
-    /** See `Finding.discriminator`. Optional: older detectors do not send one. */
-    discriminator?: string;
-  };
+  /**
+   * Injected by HookriskDetector._report. Typed loosely on purpose: it is
+   * untrusted until `metadataErrors` has passed it.
+   */
+  hookrisk?: unknown;
 }
 
 interface SlitherReport {
@@ -122,6 +159,8 @@ export interface SlitherOptions {
   binary?: string;
   enabled?: boolean;
   exec?: ExecFn;
+  /** Engine-contract schema to validate metadata blocks against. */
+  metadataSchema?: string;
 }
 
 export class SlitherEngine implements Engine {
@@ -130,6 +169,8 @@ export class SlitherEngine implements Engine {
 
   /** Populated by `run`, consumed by the manifest builder. */
   uncoveredFunctions: UncoveredFunction[] = [];
+  /** Path of the engine-contract schema; overridable for tests. */
+  readonly metadataSchema: string;
 
   private readonly binary: string;
   private readonly enabled: boolean;
@@ -139,6 +180,7 @@ export class SlitherEngine implements Engine {
     this.binary = opts.binary ?? process.env.HOOKRISK_SLITHER_BIN ?? 'slither';
     this.enabled = opts.enabled ?? true;
     this.exec = opts.exec ?? exec;
+    this.metadataSchema = opts.metadataSchema ?? metadataSchemaPath();
   }
 
   async probe(): Promise<{ available: boolean; version: string; reason?: string }> {
@@ -238,10 +280,37 @@ export class SlitherEngine implements Engine {
         return failed(reason);
       }
 
-      const all = (report.results?.detectors ?? [])
-        .filter((r) => r.check.startsWith('hookrisk-'))
-        .map((r) => normalise(r))
-        .filter((f): f is Finding => f !== null);
+      // Every hookrisk result goes through the engine contract first. A result
+      // that fails it is named, counted and dropped — never admitted with a
+      // guessed rule class, never lost without a line in the log.
+      const validate = metadataValidator(this.metadataSchema);
+      const raw = (report.results?.detectors ?? []).filter((r) => r.check.startsWith('hookrisk-'));
+      const admitted: SlitherDetectorResult[] = [];
+      let invalidMetadata = 0;
+      for (const r of raw) {
+        const errors = metadataErrors(r.hookrisk, validate);
+        if (errors.length === 0) {
+          admitted.push(r);
+          continue;
+        }
+        invalidMetadata += 1;
+        ctx.log(
+          `hookrisk: dropped a result from ${r.check} on ${describeAnchor(r)} — its hookrisk metadata ` +
+            `does not satisfy the engine contract (${errors.join('; ')}); the plugin and the CLI disagree ` +
+            'on the metadata version, reinstall with `make install-detectors`',
+        );
+      }
+      if (invalidMetadata > 0) {
+        ctx.log(`hookrisk: ${invalidMetadata} result(s) dropped for invalid metadata`);
+      }
+
+      const all = admitted.map((r) => normalise(r)).filter((f): f is Finding => f !== null);
+
+      // The profiles are the engine's own statement of what it analysed,
+      // taken before attribution so a neighbour's profile still counts as
+      // "looked at" even though its findings are set aside.
+      const scope = scopeOf(admitted, ctx.sourceFile, ctx.contractName);
+      const permissions = targetPermissions(admitted, ctx.sourceFile, ctx.contractName);
 
       // Slither has to compile the whole project — imports and inheritance make
       // anything narrower unreliable — but a scan of `src/MyHook.sol:MyHook` must
@@ -257,12 +326,15 @@ export class SlitherEngine implements Engine {
         );
       }
 
-      const targetCoverage = coverageOf(findings, ctx.contractName);
+      const targetCoverage = coverageOf(findings, ctx.contractName, scope);
       if (!targetCoverage.covered) {
         ctx.log(`hookrisk: did not analyse the target — ${targetCoverage.reason}`);
       }
 
-      ctx.log(`hookrisk: ${findings.length} finding(s)`);
+      ctx.log(
+        `hookrisk: ${findings.length} finding(s); analysed ${scope.analysedContracts.length} hook contract(s)` +
+          (permissions ? '; permissions resolved from the profile' : ''),
+      );
       return {
         engine: this.id,
         version: probe.version,
@@ -270,6 +342,9 @@ export class SlitherEngine implements Engine {
         findings,
         durationMs: Date.now() - started,
         targetCoverage,
+        scope,
+        ...(permissions ? { permissions } : {}),
+        ...(invalidMetadata > 0 ? { invalidMetadata } : {}),
         ...(unattributed.length > 0 ? { unattributed } : {}),
       };
     } finally {
@@ -278,16 +353,102 @@ export class SlitherEngine implements Engine {
   }
 }
 
-/** Translate one Slither detector result into hookrisk's shape. */
-export function normalise(result: SlitherDetectorResult): Finding | null {
-  const meta = result.hookrisk;
-  if (!meta) {
-    // A hookrisk-prefixed check with no metadata means a detector forgot to use
-    // `HookriskDetector._report`. Dropping it is deliberate: without a rule
-    // class it cannot be reconciled with other engines or mapped to a scoring
-    // dimension, so admitting it would put an unattributable row in the report.
-    return null;
+// --------------------------------------------------------------------------- //
+// The engine contract
+// --------------------------------------------------------------------------- //
+
+function metadataSchemaPath(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  return resolve(join(here, '..', '..', '..', 'schema', 'engine-metadata.schema.json'));
+}
+
+const validators = new Map<string, ValidateFunction>();
+
+/** Compile the engine-contract schema once per path. */
+export function metadataValidator(schemaFile = metadataSchemaPath()): ValidateFunction {
+  let validate = validators.get(schemaFile);
+  if (!validate) {
+    const ajv = new Ajv({ allErrors: true, strict: false, validateFormats: false });
+    validate = ajv.compile(JSON.parse(readFileSync(schemaFile, 'utf8')));
+    validators.set(schemaFile, validate);
   }
+  return validate;
+}
+
+/**
+ * Why a `hookrisk` block fails the engine contract; empty when it conforms.
+ *
+ * A missing block is the oldest failure — a detector that forgot to use
+ * `HookriskDetector._report` — and is reported in the same words as any other,
+ * because to the consumer they are the same thing: a result it cannot place.
+ */
+export function metadataErrors(block: unknown, validate = metadataValidator()): string[] {
+  if (block === undefined || block === null) return ['no hookrisk metadata block'];
+  if (validate(block)) return [];
+  return (validate.errors ?? []).slice(0, 6).map((e) => `${e.instancePath || '/'} ${e.message}`);
+}
+
+/** `MyHook.beforeSwap` or `MyHook`, for a log line about a dropped result. */
+function describeAnchor(result: SlitherDetectorResult): string {
+  const element = result.elements?.[0];
+  if (!element) return '<no element>';
+  const parent = (element.type_specific_fields?.parent as { name?: string } | undefined)?.name;
+  return parent && element.type === 'function' ? `${parent}.${element.name}` : element.name;
+}
+
+/** The contract element a `hook-profile` is anchored on, with its file. */
+function profileAnchor(result: SlitherDetectorResult): { contract: string; file: string } | null {
+  const meta = result.hookrisk as EngineMetadata;
+  if (meta.ruleClass !== 'hook-profile') return null;
+  const element = result.elements.find((e) => e.type === 'contract') ?? result.elements[0];
+  if (!element) return null;
+  return { contract: element.name, file: element.source_mapping?.filename_relative ?? '' };
+}
+
+/**
+ * What the engine analysed, from its `hook-profile` results.
+ *
+ * `analysedContracts` is `file:Contract` for every profile in the report.
+ * `targetAnalysed` requires a profile for exactly the target file and name:
+ * a same-named contract in another file is somebody else's hook.
+ */
+export function scopeOf(
+  results: SlitherDetectorResult[],
+  sourceFile: string,
+  contractName: string,
+): { analysedContracts: string[]; targetAnalysed: boolean } {
+  const anchors = results.map(profileAnchor).filter((a): a is { contract: string; file: string } => a !== null);
+  return {
+    analysedContracts: anchors.map((a) => `${a.file}:${a.contract}`).sort(),
+    targetAnalysed: anchors.some((a) => a.file === sourceFile && a.contract === contractName),
+  };
+}
+
+/** The target's permission set from its profile, or undefined. */
+export function targetPermissions(
+  results: SlitherDetectorResult[],
+  sourceFile: string,
+  contractName: string,
+): Record<string, boolean> | undefined {
+  for (const r of results) {
+    const anchor = profileAnchor(r);
+    if (anchor && anchor.file === sourceFile && anchor.contract === contractName) {
+      return (r.hookrisk as EngineMetadata).permissions;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Translate one Slither detector result into hookrisk's shape.
+ *
+ * Returns null for a result whose metadata fails the engine contract; `run`
+ * checks the same thing first so it can log and count, and this check is the
+ * guarantee for callers that skip `run`.
+ */
+export function normalise(result: SlitherDetectorResult): Finding | null {
+  if (metadataErrors(result.hookrisk).length > 0) return null;
+  const meta = result.hookrisk as EngineMetadata;
 
   // Prefer the first element that is not a dependency; findings anchored in
   // lib/ point at code the user did not write.
@@ -333,6 +494,8 @@ export function normalise(result: SlitherDetectorResult): Finding | null {
     location,
     ...(fn ? { function: fn } : {}),
     ...(discriminator ? { discriminator } : {}),
+    ...(meta.permissions ? { permissions: meta.permissions } : {}),
+    ...(meta.metrics ? { metrics: meta.metrics } : {}),
     evidence: [description],
     engines: [
       {
@@ -372,18 +535,35 @@ export function partitionByTarget(
 /**
  * Whether hookrisk's detectors actually examined the target.
  *
- * An `unsupported-hook-abi` classification is the detectors saying "this is
- * hook-shaped and I could not read it". Every other finding — or none — on such
- * a target is silence from code that never looked, and the scorer must not
- * turn that silence into zeros.
+ * Two signals, and the negative one wins. An `unsupported-hook-abi`
+ * classification is the detectors saying "this is hook-shaped and I could not
+ * read it" — including the `partial` shape, where a profile exists for the
+ * callbacks that did match but the rest was never judged. Otherwise the answer
+ * is the presence of a `hook-profile` for the target: without one the plugin
+ * never recognised the contract as a hook, and every other finding — or none —
+ * is silence from code that never looked. The scorer must not turn that
+ * silence into zeros.
+ *
+ * `scope` is optional only for callers that pre-date the profile; `run` always
+ * supplies it, and a missing profile there is a missing profile.
  */
 export function coverageOf(
   findings: Finding[],
   contractName: string,
+  scope?: { analysedContracts: string[]; targetAnalysed: boolean },
 ): { covered: boolean; reason?: string } {
   const unsupported = findings.find((f) => f.ruleClass === 'unsupported-hook-abi');
   if (unsupported) {
     return { covered: false, reason: `${contractName} uses a hook ABI hookrisk cannot analyse: ${unsupported.title}` };
+  }
+  if (scope && !scope.targetAnalysed) {
+    const looked = scope.analysedContracts.length;
+    return {
+      covered: false,
+      reason:
+        `hookrisk emitted no hook-profile for ${contractName}: the detectors did not recognise it as a v4 hook` +
+        (looked > 0 ? ` (they analysed ${looked} other contract(s): ${scope.analysedContracts.join(', ')})` : ''),
+    };
   }
   return { covered: true };
 }

@@ -27,6 +27,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CORPUS = REPO_ROOT / "corpus"
+METADATA_SCHEMA = REPO_ROOT / "schema" / "engine-metadata.schema.json"
 
 #: Everything the plugin ships, so a detector left out of `make test-corpus` by
 #: mistake still runs here.
@@ -37,6 +38,7 @@ DETECTORS = ",".join(
         "hookrisk-custom-accounting",
         "hookrisk-disabled-callback",
         "hookrisk-unsupported-abi",
+        "hookrisk-hook-profile",
     ]
 )
 
@@ -48,7 +50,100 @@ KNOWN_RULE_CLASSES = {
     "custom-accounting",
     "callback-intentionally-disabled",
     "unsupported-hook-abi",
+    "hook-profile",
 }
+
+#: The seven metrics every hook-profile must carry, with their JSON types.
+PROFILE_METRICS = {
+    "callbacksImplemented": int,
+    "callbacksDeclared": int,
+    "stateWritesInCallbacks": int,
+    "externalCallsInSwapPath": int,
+    "internalFunctionsReachableFromCallbacks": int,
+    "usesReturnsDelta": bool,
+    "hasOwnerOnlyFunctions": bool,
+}
+
+
+# --------------------------------------------------------------------------- #
+# A very small JSON Schema checker
+# --------------------------------------------------------------------------- #
+#
+# The CLI validates the metadata block with Ajv. This side has no schema
+# library and must not grow a dependency for one file, so the subset of
+# draft 2020-12 the engine-metadata schema actually uses is implemented here:
+# type, required, properties, additionalProperties, propertyNames, items,
+# enum, const, minimum, minLength, uniqueItems. Anything else in the schema is
+# an error, not silently ignored — a keyword this checker does not know is a
+# keyword the Python gate would stop enforcing without anyone noticing.
+
+_KNOWN_KEYWORDS = {
+    "$schema", "$id", "title", "description", "type", "required", "properties",
+    "additionalProperties", "propertyNames", "items", "enum", "const", "minimum",
+    "minLength", "uniqueItems",
+}
+
+_JSON_TYPES = {
+    "object": dict,
+    "array": list,
+    "string": str,
+    "boolean": bool,
+    "integer": int,
+}
+
+
+def schema_errors(schema: dict, value, path: str = "$") -> list[str]:
+    """Return every way `value` violates `schema`; empty means it conforms."""
+    unknown = set(schema) - _KNOWN_KEYWORDS
+    if unknown:
+        return [f"{path}: schema uses unsupported keywords {sorted(unknown)}"]
+
+    errors: list[str] = []
+    expected = schema.get("type")
+    if expected is not None:
+        py = _JSON_TYPES[expected]
+        # bool is an int in Python; JSON says otherwise.
+        ok = isinstance(value, py) and not (py is int and isinstance(value, bool))
+        if not ok:
+            return [f"{path}: expected {expected}, got {type(value).__name__}"]
+    if "const" in schema and value != schema["const"]:
+        errors.append(f"{path}: expected const {schema['const']!r}, got {value!r}")
+    if "enum" in schema and value not in schema["enum"]:
+        errors.append(f"{path}: {value!r} not in enum")
+    if "minimum" in schema and value < schema["minimum"]:
+        errors.append(f"{path}: {value} < minimum {schema['minimum']}")
+    if "minLength" in schema and len(value) < schema["minLength"]:
+        errors.append(f"{path}: shorter than {schema['minLength']}")
+
+    if isinstance(value, dict):
+        for key in schema.get("required", []):
+            if key not in value:
+                errors.append(f"{path}: missing required {key!r}")
+        properties = schema.get("properties", {})
+        extra = schema.get("additionalProperties", True)
+        names = schema.get("propertyNames")
+        for key, item in value.items():
+            if names is not None:
+                errors.extend(schema_errors(names, key, f"{path}.{key}(name)"))
+            if key in properties:
+                errors.extend(schema_errors(properties[key], item, f"{path}.{key}"))
+            elif extra is False:
+                errors.append(f"{path}: unexpected property {key!r}")
+            elif isinstance(extra, dict):
+                errors.extend(schema_errors(extra, item, f"{path}.{key}"))
+
+    if isinstance(value, list):
+        if schema.get("uniqueItems") and len({json.dumps(v, sort_keys=True) for v in value}) != len(value):
+            errors.append(f"{path}: items are not unique")
+        if "items" in schema:
+            for index, item in enumerate(value):
+                errors.extend(schema_errors(schema["items"], item, f"{path}[{index}]"))
+    return errors
+
+
+@lru_cache(maxsize=None)
+def metadata_schema() -> dict:
+    return json.loads(METADATA_SCHEMA.read_text())
 
 
 def slither_bin() -> str:
@@ -113,6 +208,16 @@ def severe(findings: list[dict]) -> list[dict]:
     return [f for f in findings if f["impact"] in ("High", "Medium")]
 
 
+def profiles(findings: list[dict]) -> dict[str, dict]:
+    """Contract name -> hookrisk block of its hook-profile. Exactly one each."""
+    out: dict[str, dict] = {}
+    for finding in by_check(findings, "hookrisk-hook-profile"):
+        name = anchor(finding)
+        assert name not in out, f"two hook-profiles for {name}"
+        out[name] = finding["hookrisk"]
+    return out
+
+
 class MetadataContract(unittest.TestCase):
     """The `hookrisk` block every finding carries, which the CLI parses."""
 
@@ -123,6 +228,46 @@ class MetadataContract(unittest.TestCase):
                 self.assertIsNotNone(meta, f"{finding['check']} on {anchor(finding)} has no hookrisk block")
                 self.assertIn(meta["ruleClass"], KNOWN_RULE_CLASSES)
                 self.assertIsInstance(meta["isClassification"], bool)
+
+    def test_every_block_validates_against_the_engine_metadata_schema(self) -> None:
+        # The same schema the CLI enforces with Ajv. A block that fails here
+        # would be dropped there with a log line, and the finding would vanish
+        # from the report; this is where that drift is caught first.
+        for target in ("src/good", "src/bad", "src/legacy"):
+            for finding in scan(target):
+                errors = schema_errors(metadata_schema(), finding["hookrisk"])
+                self.assertEqual([], errors, f"{finding['check']} on {anchor(finding)}: {errors}")
+                self.assertEqual("1", finding["hookrisk"]["version"])
+
+    def test_the_schema_checker_rejects_what_the_cli_would_reject(self) -> None:
+        good = {
+            "version": "1",
+            "ruleClass": "hook-profile",
+            "informsDimensions": [],
+            "informsTriggers": [],
+            "isClassification": True,
+            "metrics": {name: (0 if kind is int else False) for name, kind in PROFILE_METRICS.items()},
+            "permissions": {"beforeSwap": True},
+            "callbacks": ["beforeSwap"],
+        }
+        self.assertEqual([], schema_errors(metadata_schema(), good))
+        cases = {
+            "version drift": {**good, "version": "2"},
+            "unknown class": {**good, "ruleClass": "made-up"},
+            "missing required": {k: v for k, v in good.items() if k != "isClassification"},
+            "extra key": {**good, "extra": 1},
+            "bool as int": {**good, "metrics": {**good["metrics"], "usesReturnsDelta": 0}},
+            "int as bool": {**good, "metrics": {**good["metrics"], "callbacksDeclared": True}},
+            "negative metric": {**good, "metrics": {**good["metrics"], "callbacksDeclared": -1}},
+            "missing metric": {**good, "metrics": {k: v for k, v in good["metrics"].items() if k != "callbacksDeclared"}},
+            "unknown permission": {**good, "permissions": {"beforeSwapp": True}},
+            "permission not bool": {**good, "permissions": {"beforeSwap": "yes"}},
+            "unknown callback": {**good, "callbacks": ["beforeSwapReturnDelta"]},
+            "duplicate callback": {**good, "callbacks": ["beforeSwap", "beforeSwap"]},
+            "empty discriminator": {**good, "discriminator": ""},
+        }
+        for label, block in cases.items():
+            self.assertNotEqual([], schema_errors(metadata_schema(), block), label)
 
     def test_classifications_are_informational(self) -> None:
         for target in ("src/good", "src/bad", "src/legacy"):
@@ -179,6 +324,103 @@ class GoodCorpus(unittest.TestCase):
     def test_no_unsupported_abi_in_good(self) -> None:
         self.assertEqual([], by_check(scan("src/good"), "hookrisk-unsupported-abi"))
 
+    def test_admin_fixtures_stay_clean(self) -> None:
+        # An admin surface is a profile metric, not a finding: the fixture
+        # exists to exercise `hasOwnerOnlyFunctions` and must trip nothing.
+        for check in ("hookrisk-unprotected-callback", "hookrisk-flag-divergence", "hookrisk-disabled-callback"):
+            hits = [anchor(f) for f in by_check(scan("src/good"), check)]
+            self.assertFalse([h for h in hits if "AdminHook" in h], f"{check} fired on {hits}")
+
+
+class HookProfile(unittest.TestCase):
+    """One `hookrisk-hook-profile` per recognised hook, with sane metrics."""
+
+    GOOD = {
+        "CleanHook",
+        "IntentionalRevertHook",
+        "ProductionAntiSandwichHook",
+        "ProductionLimitOrderHook",
+        "ProductionLiquidityPenaltyHook",
+        "OwnableAdminHook",
+        "HandRolledAdminHook",
+    }
+    BAD = {"UnvalidatedCallback", "DivergentHook", "OrphanDeltaHook"}
+
+    def test_exactly_one_profile_per_hook_in_good_and_bad(self) -> None:
+        self.assertEqual(self.GOOD, set(profiles(scan("src/good"))))
+        self.assertEqual(self.BAD, set(profiles(scan("src/bad"))))
+
+    def test_profiles_are_informational_classifications_anchored_on_the_contract(self) -> None:
+        for target in ("src/good", "src/bad"):
+            for finding in by_check(scan(target), "hookrisk-hook-profile"):
+                self.assertEqual("Informational", finding["impact"], anchor(finding))
+                self.assertEqual("contract", finding["elements"][0]["type"], anchor(finding))
+                meta = finding["hookrisk"]
+                self.assertTrue(meta["isClassification"])
+                self.assertEqual("hook-profile", meta["ruleClass"])
+                self.assertNotIn("discriminator", meta)
+                for name, kind in PROFILE_METRICS.items():
+                    self.assertIsInstance(meta["metrics"][name], kind, f"{anchor(finding)}.{name}")
+
+    def test_clean_hook_metrics(self) -> None:
+        meta = profiles(scan("src/good"))["CleanHook"]
+        metrics = meta["metrics"]
+        self.assertEqual(2, metrics["callbacksImplemented"])
+        self.assertEqual(2, metrics["callbacksDeclared"])
+        self.assertGreaterEqual(metrics["stateWritesInCallbacks"], 1)
+        self.assertEqual(0, metrics["externalCallsInSwapPath"])
+        self.assertFalse(metrics["usesReturnsDelta"])
+        self.assertFalse(metrics["hasOwnerOnlyFunctions"])
+        self.assertEqual(["afterSwap", "beforeSwap"], meta["callbacks"])
+        # Every field of Hooks.Permissions, resolved, not just the true ones.
+        self.assertEqual(14, len(meta["permissions"]))
+        self.assertEqual({"beforeSwap", "afterSwap"}, {k for k, v in meta["permissions"].items() if v})
+
+    def test_inherited_permissions_are_resolved(self) -> None:
+        # The OpenZeppelin subclasses declare nothing themselves; the source
+        # regex the CLI used to run found nothing on them. The profile follows
+        # inheritance, which is the point of making it the source of truth.
+        found = profiles(scan("src/good"))
+        self.assertEqual(
+            {"beforeSwap", "afterSwap", "afterSwapReturnDelta"},
+            {k for k, v in found["ProductionAntiSandwichHook"]["permissions"].items() if v},
+        )
+        self.assertTrue(found["ProductionAntiSandwichHook"]["metrics"]["usesReturnsDelta"])
+        self.assertTrue(found["ProductionLiquidityPenaltyHook"]["metrics"]["usesReturnsDelta"])
+
+    def test_a_deliberate_revert_guard_is_not_an_implemented_callback(self) -> None:
+        meta = profiles(scan("src/good"))["IntentionalRevertHook"]
+        self.assertEqual([], meta["callbacks"])
+        self.assertEqual(0, meta["metrics"]["callbacksImplemented"])
+        self.assertEqual(1, meta["metrics"]["callbacksDeclared"])
+
+    def test_owner_only_functions_in_both_shapes(self) -> None:
+        found = profiles(scan("src/good"))
+        self.assertTrue(found["OwnableAdminHook"]["metrics"]["hasOwnerOnlyFunctions"], "Ownable onlyOwner")
+        self.assertTrue(found["HandRolledAdminHook"]["metrics"]["hasOwnerOnlyFunctions"], "require(msg.sender == admin)")
+        for name in ("CleanHook", "ProductionLimitOrderHook", "IntentionalRevertHook"):
+            self.assertFalse(found[name]["metrics"]["hasOwnerOnlyFunctions"], name)
+
+    def test_hand_rolled_hook_without_permissions_has_none(self) -> None:
+        meta = profiles(scan("src/bad"))["UnvalidatedCallback"]
+        self.assertNotIn("permissions", meta)
+        self.assertEqual(0, meta["metrics"]["callbacksDeclared"])
+        self.assertEqual(3, meta["metrics"]["callbacksImplemented"])
+        self.assertEqual(["afterSwap", "beforeAddLiquidity", "beforeSwap"], meta["callbacks"])
+
+    def test_stub_is_not_implemented_but_override_is(self) -> None:
+        meta = profiles(scan("src/bad"))["DivergentHook"]
+        self.assertEqual(["afterSwap"], meta["callbacks"])
+        self.assertEqual(1, meta["metrics"]["callbacksDeclared"])
+        self.assertGreaterEqual(meta["metrics"]["stateWritesInCallbacks"], 1)
+
+    def test_legacy_hooks_get_no_profile_except_the_partially_readable_one(self) -> None:
+        # LegacyHook and LegacyAfterInitializeHook were never analysed and
+        # must not claim otherwise. MixedAbiHook's current-ABI callbacks were,
+        # so it carries a profile; its `partial` unsupported-ABI finding is
+        # what revokes coverage in the CLI.
+        self.assertEqual({"MixedAbiHook"}, set(profiles(scan("src/legacy"))))
+
 
 class BadCorpus(unittest.TestCase):
     """corpus/src/bad — every planted defect is reported, at the right element."""
@@ -230,7 +472,9 @@ class LegacyCorpus(unittest.TestCase):
     """corpus/src/legacy — the scan admits it could not read the hook."""
 
     def test_only_unsupported_abi_fires(self) -> None:
-        findings = scan("src/legacy")
+        # Plus the hook-profile of the one partially readable contract; see
+        # HookProfile.test_legacy_hooks_get_no_profile_except_the_partially_readable_one.
+        findings = [f for f in scan("src/legacy") if f["check"] != "hookrisk-hook-profile"]
         self.assertTrue(findings)
         self.assertEqual({"hookrisk-unsupported-abi"}, {f["check"] for f in findings})
         for finding in findings:
@@ -255,7 +499,9 @@ class LegacyCorpus(unittest.TestCase):
 
     def test_mixed_abi_hook_gets_partial_classification_not_hs02(self) -> None:
         # The v2-on-v4 shape: analysed for what matches, honest about the rest.
-        [finding] = [f for f in scan("src/legacy") if anchor(f) == "MixedAbiHook"]
+        [finding] = [
+            f for f in scan("src/legacy") if anchor(f) == "MixedAbiHook" and f["check"] != "hookrisk-hook-profile"
+        ]
         self.assertEqual("hookrisk-unsupported-abi", finding["check"])
         self.assertEqual("partial", finding["hookrisk"]["discriminator"])
         self.assertIn("beforeAddLiquidity", finding["description"])

@@ -73,6 +73,10 @@ __all__ = [
     "external_calls_in",
     "swap_path_functions",
     "reachable_functions",
+    "state_writes_in",
+    "owner_variables",
+    "guards_owner",
+    "owner_only_functions",
 ]
 
 #: Callback names whose bodies constitute "the swap path" for HS-05.
@@ -86,6 +90,15 @@ _POOL_MANAGER_TYPES = frozenset({"IPoolManager", "PoolManager"})
 #: candidate variable, and a wrong candidate can at worst cause a false negative
 #: in the guard check, never a false positive.
 _POOL_MANAGER_NAMES = frozenset({"poolmanager", "manager", "pm", "_poolmanager"})
+
+#: Substrings that mark an address-typed state variable as holding a privileged
+#: party. Name-based on purpose and only ever used to *add* a candidate: the
+#: result feeds a boolean profile metric (`hasOwnerOnlyFunctions`), where a
+#: missed synonym costs one false "no admin surface" and a wrong hit costs
+#: nothing that scores. `manager` is deliberately absent — that is the
+#: PoolManager, and comparing msg.sender to it is the HS-01 guard, not an
+#: admin check.
+_OWNER_NAME_HINTS = ("owner", "admin", "governance", "governor", "guardian", "authority", "controller", "operator")
 
 
 @dataclass(frozen=True)
@@ -586,6 +599,115 @@ def _compares_sender_to(node: Node, targets: set[StateVariable]) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Owner-only functions
+# --------------------------------------------------------------------------- #
+
+
+def owner_variables(contract: Contract) -> set[StateVariable]:
+    """State variables that plausibly hold a privileged party.
+
+    Address-typed with an owner-like name. The PoolManager reference is
+    excluded even when its name matches: `guards_pool_manager` owns that
+    comparison and it means the opposite of an admin check.
+    """
+    pool_manager = pool_manager_variables(contract)
+    candidates: set[StateVariable] = set()
+    # `contract.state_variables` omits *private* inherited variables, and
+    # OpenZeppelin's `Ownable._owner` is exactly that. The comparison still
+    # happens in code the contract inherits, so every ancestor's declarations
+    # are candidates.
+    declared: list[StateVariable] = list(contract.state_variables)
+    for base in contract.inheritance:
+        declared.extend(base.state_variables_declared)
+    for variable in declared:
+        if variable in pool_manager:
+            continue
+        if str(variable.type) != "address":
+            # Ownable's `_owner` is a plain `address`; an interface-typed
+            # admin reference would be an unusual shape and is not chased.
+            continue
+        name = variable.name.lower().lstrip("_")
+        if any(hint in name for hint in _OWNER_NAME_HINTS):
+            candidates.add(variable)
+    return candidates
+
+
+def guards_owner(function: Function, owner_vars: set[StateVariable]) -> Node | None:
+    """Find the node that constrains `msg.sender` to an owner-like variable.
+
+    Same search as `guards_pool_manager` (body, modifiers, internal callees),
+    with one extension the pool-manager guard does not need. OpenZeppelin's
+    `Ownable` writes its check as `owner() != _msgSender()`: both operands are
+    results of internal calls, so the comparing node reads neither `msg.sender`
+    nor `_owner` directly. For that shape an operand produced by an internal
+    call in the same node is resolved to what its callee reads, transitively.
+    A hand-rolled `require(msg.sender == owner)` still matches the direct way.
+    """
+    if not owner_vars:
+        return None
+    for node in _guard_candidate_nodes(function):
+        if _compares_sender_to(node, owner_vars) or _compares_via_calls(node, owner_vars):
+            return node
+    return None
+
+
+def _compares_via_calls(node: Node, owner_vars: set[StateVariable]) -> bool:
+    """`owner() != _msgSender()`: an EQ/NE whose operands come from callees."""
+    producers: dict[object, Function] = {}
+    for ir in node.irs:
+        if isinstance(ir, InternalCall) and isinstance(ir.function, Function) and ir.lvalue is not None:
+            producers[ir.lvalue] = ir.function
+
+    def source(operand) -> str | None:
+        if isinstance(operand, SolidityVariableComposed) and operand.name == "msg.sender":
+            return "sender"
+        if isinstance(operand, StateVariable) and operand in owner_vars:
+            return "owner"
+        callee = producers.get(operand)
+        if callee is None:
+            return None
+        if any(
+            isinstance(v, SolidityVariableComposed) and v.name == "msg.sender"
+            for v in callee.all_solidity_variables_read()
+        ):
+            return "sender"
+        if owner_vars & set(callee.all_state_variables_read()):
+            return "owner"
+        return None
+
+    for ir in node.irs:
+        if not isinstance(ir, Binary) or ir.type not in (BinaryType.EQUAL, BinaryType.NOT_EQUAL):
+            continue
+        sides = {source(ir.variable_left), source(ir.variable_right)}
+        if {"sender", "owner"} <= sides:
+            return True
+    return False
+
+
+def owner_only_functions(contract: Contract) -> list[Function]:
+    """External or public non-callback functions gated on an owner-like variable.
+
+    The constructor and the IHooks callbacks are excluded — the former is not
+    an admin surface and the latter are the PoolManager's, judged by HS-01.
+    View and pure functions are excluded too: a gated getter changes nothing
+    on chain and is not what "owner-only functions" means to a reviewer.
+    """
+    owner_vars = owner_variables(contract)
+    if not owner_vars:
+        return []
+    callbacks = {cb.function for cb in implemented_callbacks(contract)}
+    gated: list[Function] = []
+    for function in contract.functions_entry_points:
+        if function.is_constructor or not function.is_implemented:
+            continue
+        if function.view or function.pure or function in callbacks:
+            continue
+        if guards_owner(function, owner_vars) is not None:
+            gated.append(function)
+    return gated
+
+
+# --------------------------------------------------------------------------- #
 # Declared permissions
 # --------------------------------------------------------------------------- #
 
@@ -670,14 +792,26 @@ RETURNS_DELTA_FIELDS: frozenset[str] = frozenset(
 # --------------------------------------------------------------------------- #
 
 
-def reachable_functions(function: Function) -> set[Function]:
-    """Every implemented function reachable from `function` by internal calls."""
+def reachable_functions(function: Function, contract: Contract | None = None) -> set[Function]:
+    """Every implemented function reachable from `function` by internal calls.
+
+    Modifiers are included: a reentrancy lock or an access check is code the
+    callback executes. Pass `contract` to resolve virtual dispatch on the way —
+    without it, `BaseHook.beforeSwap`'s call to `_beforeSwap` lands on the
+    base's `revert HookNotImplemented()` stub rather than the override that
+    does the work, and every metric computed over the result describes the
+    library instead of the hook. See `resolve_override`.
+    """
     seen: set[Function] = set()
 
     def walk(fn: Function) -> None:
         for internal in fn.internal_calls:
             target = getattr(internal, "function", internal)
-            if isinstance(target, Function) and target.is_implemented and target not in seen:
+            if not isinstance(target, Function) or not target.is_implemented:
+                continue
+            if contract is not None and not isinstance(target, Modifier):
+                target = resolve_override(contract, target)
+            if target not in seen:
                 seen.add(target)
                 walk(target)
 
@@ -692,8 +826,26 @@ def swap_path_functions(contract: Contract) -> set[Function]:
     ]
     reachable: set[Function] = set(roots)
     for root in roots:
-        reachable |= reachable_functions(root)
+        reachable |= reachable_functions(root, contract)
     return reachable
+
+
+def state_writes_in(functions: Iterable[Function]) -> int:
+    """Count state-variable writes across `functions`, one per (node, variable).
+
+    Node-level rather than function-level so `a += 1; a += 1` counts twice and
+    a loop body counts once: the number approximates how much mutation a path
+    performs, which is what the complexity dimension wants, not how many
+    variables exist. Writes are attributed wherever they happen — a hook that
+    inherits its logic from a library (the OpenZeppelin mocks in the corpus)
+    still mutates that state on every callback, and a metric that excluded it
+    would call a limit-order book "stateless".
+    """
+    count = 0
+    for function in functions:
+        for node in function.nodes:
+            count += len(set(node.state_variables_written))
+    return count
 
 
 @dataclass(frozen=True)

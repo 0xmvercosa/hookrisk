@@ -65,7 +65,16 @@ export type RuleClass =
    * classification with a scoring consequence: every hookrisk-derived dimension
    * for this target is unmeasured, because the detectors never looked.
    */
-  | 'unsupported-hook-abi';
+  | 'unsupported-hook-abi'
+  /**
+   * The engine's "I looked at this contract" signal: one per recognised hook,
+   * anchored on the contract, carrying the resolved permission set, the
+   * implemented callbacks and the metrics complexity is derived from. A
+   * classification; its *absence* for the target is what matters, because a
+   * target without one was never analysed and no dimension may be scored
+   * from its silence.
+   */
+  | 'hook-profile';
 
 /**
  * Rule classes that classify rather than accuse.
@@ -79,6 +88,7 @@ export const CLASSIFICATION_CLASSES: ReadonlySet<RuleClass> = new Set<RuleClass>
   'custom-accounting',
   'callback-intentionally-disabled',
   'unsupported-hook-abi',
+  'hook-profile',
 ]);
 
 export const isClassification = (ruleClass: RuleClass): boolean =>
@@ -145,6 +155,14 @@ export interface Finding {
   informsTriggers?: string[];
   /** Where to read more — post-mortems, upstream docs. */
   references?: string[];
+  /**
+   * The resolved `getHookPermissions()` set, on a `hook-profile` finding.
+   * Carried on the finding as well as on the engine result so the manifest
+   * can show where the permissions came from next to the profile itself.
+   */
+  permissions?: Record<string, boolean>;
+  /** Per-contract measurements, on a `hook-profile` finding. */
+  metrics?: Record<string, number | boolean>;
 }
 
 /** Outcome of one engine run. */
@@ -172,6 +190,26 @@ export interface EngineResult {
    * Listed so the manifest can say what was set aside rather than losing it.
    */
   unattributed?: Array<{ file: string; count: number }>;
+  /**
+   * What the engine claims to have analysed: every contract it emitted a
+   * `hook-profile` for, and whether the target is among them. This is the
+   * positive statement `targetCoverage` is derived from — coverage is no
+   * longer inferred from the absence of a disclaimer.
+   */
+  scope?: { analysedContracts: string[]; targetAnalysed: boolean };
+  /**
+   * The target's resolved permission set, from its `hook-profile`. Inheritance
+   * followed, every field present. Absent when the engine did not analyse the
+   * target or the hook declares no `getHookPermissions()`; the CLI then falls
+   * back to the harness's runtime derivation.
+   */
+  permissions?: Record<string, boolean>;
+  /**
+   * Results the engine emitted whose metadata block failed the engine
+   * contract (schema/engine-metadata.schema.json) and were dropped. Never
+   * silently zero: a drifted detector shows up here, not as a clean scan.
+   */
+  invalidMetadata?: number;
 }
 
 /** What every engine receives. */

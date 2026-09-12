@@ -4,9 +4,11 @@
  * The adapter's job is to make sure nothing Slither does quietly turns into a
  * clean-looking result. Each test here pins one way that used to happen: a
  * failure with no reason, an IR-lifting gap that never reached the manifest, a
- * target the detectors never recognised, or a neighbour's findings vanishing
- * without a trace. Slither itself is replaced by an `exec` that returns
- * fixture output captured from real runs.
+ * target the detectors never recognised, a neighbour's findings vanishing
+ * without a trace, or a detector drifting from the engine contract and its
+ * results either being admitted unplaceable or dropped without a word. Slither
+ * itself is replaced by an `exec` that returns fixture output captured from
+ * real runs.
  */
 
 import assert from 'node:assert/strict';
@@ -17,14 +19,18 @@ import { describe, test } from 'node:test';
 import { describeFailure, mostInformativeLine } from '../errors.js';
 import type { EngineContext } from '../types.js';
 import {
+  type EngineMetadata,
   type ExecFn,
   SlitherEngine,
   type SlitherDetectorResult,
   collectUncovered,
   coverageOf,
   describeSlitherFailure,
+  metadataErrors,
   normalise,
   partitionByTarget,
+  scopeOf,
+  targetPermissions,
 } from './slither.js';
 
 // --------------------------------------------------------------------------- //
@@ -81,26 +87,81 @@ function detectorResult(overrides: Partial<SlitherDetectorResult> & { check: str
       },
     ],
     hookrisk: {
+      version: '1',
       ruleClass: 'flag-implementation-divergence',
       informsDimensions: ['complexity'],
       informsTriggers: [],
       isClassification: false,
-    },
+    } satisfies EngineMetadata,
     ...overrides,
   };
 }
+
+/** All fourteen fields, as the plugin resolves them. */
+const PERMISSIONS: Record<string, boolean> = {
+  beforeInitialize: false,
+  afterInitialize: false,
+  beforeAddLiquidity: false,
+  afterAddLiquidity: false,
+  beforeRemoveLiquidity: false,
+  afterRemoveLiquidity: false,
+  beforeSwap: true,
+  afterSwap: true,
+  beforeDonate: false,
+  afterDonate: false,
+  beforeSwapReturnDelta: false,
+  afterSwapReturnDelta: false,
+  afterAddLiquidityReturnDelta: false,
+  afterRemoveLiquidityReturnDelta: false,
+};
+
+/** What `hookrisk-hook-profile` emitted for corpus/src/good/CleanHook.sol. */
+/** `permissions: null` is a hook that declares no getHookPermissions(). */
+const hookProfile = (contract = 'MyHook', file = 'src/MyHook.sol', permissions: Record<string, boolean> | null = PERMISSIONS): SlitherDetectorResult =>
+  detectorResult({
+    check: 'hookrisk-hook-profile',
+    impact: 'Informational',
+    confidence: 'High',
+    description: `${contract} (${file}#18-20) is a recognised v4 hook: implements afterSwap, beforeSwap; declares 2 callback permission(s); 1 state write(s) reachable from callbacks; 0 external call(s) in the swap path.\n`,
+    elements: [
+      {
+        type: 'contract',
+        name: contract,
+        source_mapping: { filename_relative: file, lines: [18, 19, 20], is_dependency: false },
+      },
+    ],
+    hookrisk: {
+      version: '1',
+      ruleClass: 'hook-profile',
+      informsDimensions: ['complexity'],
+      informsTriggers: [],
+      isClassification: true,
+      metrics: {
+        callbacksImplemented: 2,
+        callbacksDeclared: 2,
+        stateWritesInCallbacks: 1,
+        externalCallsInSwapPath: 0,
+        internalFunctionsReachableFromCallbacks: 2,
+        usesReturnsDelta: false,
+        hasOwnerOnlyFunctions: false,
+      },
+      ...(permissions ? { permissions } : {}),
+      callbacks: ['afterSwap', 'beforeSwap'],
+    } satisfies EngineMetadata,
+  });
 
 const hs02 = (discriminator: string): SlitherDetectorResult =>
   detectorResult({
     check: 'hookrisk-flag-divergence',
     description: `MyHook (src/MyHook.sol#18-20) declares permission \`${discriminator}\` but provides no working implementation.\n`,
     hookrisk: {
+      version: '1',
       ruleClass: 'flag-implementation-divergence',
       informsDimensions: ['complexity'],
       informsTriggers: [],
       isClassification: false,
       discriminator,
-    },
+    } satisfies EngineMetadata,
   });
 
 const hs01 = (callback: string, file = 'src/MyHook.sol'): SlitherDetectorResult =>
@@ -115,12 +176,13 @@ const hs01 = (callback: string, file = 'src/MyHook.sol'): SlitherDetectorResult 
       },
     ],
     hookrisk: {
+      version: '1',
       ruleClass: 'unprotected-hook-callback',
       informsDimensions: ['complexity'],
       informsTriggers: [],
       isClassification: false,
       discriminator: callback,
-    },
+    } satisfies EngineMetadata,
   });
 
 const unsupportedAbi = (): SlitherDetectorResult =>
@@ -129,11 +191,12 @@ const unsupportedAbi = (): SlitherDetectorResult =>
     impact: 'Informational',
     description: 'MyHook (src/MyHook.sol#18-20) declares getHooksCalls() returning Hooks.Calls, the 2023 hook ABI, which hookrisk cannot analyse. No detector examined it.\n',
     hookrisk: {
+      version: '1',
       ruleClass: 'unsupported-hook-abi',
       informsDimensions: [],
       informsTriggers: [],
       isClassification: true,
-    },
+    } satisfies EngineMetadata,
   });
 
 function report(detectors: SlitherDetectorResult[]): unknown {
@@ -272,27 +335,137 @@ describe('coverage reporting', () => {
     assert.deepEqual(collectUncovered(''), []);
   });
 
-  test('an unsupported-hook-abi finding on the target marks it not covered', async () => {
-    const { result, log } = await runWith({ code: 255, report: report([unsupportedAbi()]) });
+  test('an unsupported-hook-abi finding on the target marks it not covered, even next to a profile', async () => {
+    // The `partial` shape: the plugin profiled the callbacks it could read and
+    // disclaimed the rest. The disclaimer wins.
+    const { result, log } = await runWith({ code: 255, report: report([unsupportedAbi(), hookProfile()]) });
 
     assert.equal(result.status, 'ok', 'the engine ran');
     assert.equal(result.targetCoverage?.covered, false, 'but it did not look');
     assert.ok(result.targetCoverage?.reason?.includes('MyHook'), result.targetCoverage?.reason);
     assert.ok(result.targetCoverage?.reason?.includes('2023 hook ABI'));
     assert.ok(log.some((l) => l.includes('did not analyse the target')));
-    assert.equal(result.findings.length, 1, 'the classification itself is still reported');
-    assert.equal(result.findings[0]!.severity, 'info');
+    assert.equal(result.findings.length, 2, 'the classifications themselves are still reported');
+    assert.ok(result.findings.every((f) => f.severity === 'info'));
+    assert.equal(result.scope?.targetAnalysed, true, 'the scope records what the plugin said');
   });
 
-  test('a target the detectors did examine is reported as covered', async () => {
-    const { result } = await runWith({ code: 255, report: report([hs02('beforeSwap')]) });
+  test('a target with a hook-profile is reported as covered', async () => {
+    const { result } = await runWith({ code: 255, report: report([hookProfile(), hs02('beforeSwap')]) });
     assert.deepEqual(result.targetCoverage, { covered: true });
+    assert.deepEqual(result.scope, { analysedContracts: ['src/MyHook.sol:MyHook'], targetAnalysed: true });
+  });
+
+  test('findings without a hook-profile for the target do not count as coverage', async () => {
+    // Before the profile existed this shape read as "covered": an HS-02 on the
+    // target proved the detectors looked. It still does — but the contract now
+    // is that the plugin *says* what it analysed, and a plugin that did not is
+    // a plugin the CLI cannot vouch for.
+    const { result, log } = await runWith({ code: 255, report: report([hs02('beforeSwap')]) });
+    assert.equal(result.targetCoverage?.covered, false);
+    assert.ok(result.targetCoverage?.reason?.includes('no hook-profile for MyHook'), result.targetCoverage?.reason);
+    assert.deepEqual(result.scope, { analysedContracts: [], targetAnalysed: false });
+    assert.ok(log.some((l) => l.includes('did not analyse the target')));
+  });
+
+  test('a profile for a same-named contract in another file is not the target', async () => {
+    const { result } = await runWith({
+      code: 255,
+      report: report([hookProfile('MyHook', 'src/other/MyHook.sol'), hookProfile('Neighbour', 'src/Neighbour.sol')]),
+    });
+    assert.equal(result.targetCoverage?.covered, false);
+    assert.ok(result.targetCoverage?.reason?.includes('analysed 2 other contract(s)'), result.targetCoverage?.reason);
+    assert.deepEqual(result.scope?.analysedContracts, ['src/Neighbour.sol:Neighbour', 'src/other/MyHook.sol:MyHook']);
+    assert.equal(result.permissions, undefined, 'another contract’s permissions are not the target’s');
   });
 
   test('coverageOf is the single source of that judgement', () => {
-    assert.equal(coverageOf([], 'X').covered, true);
+    assert.equal(coverageOf([], 'X').covered, true, 'no scope: legacy callers keep the old answer');
+    assert.equal(coverageOf([], 'X', { analysedContracts: [], targetAnalysed: true }).covered, true);
+    assert.equal(coverageOf([], 'X', { analysedContracts: [], targetAnalysed: false }).covered, false);
     const unsupported = normalise(unsupportedAbi())!;
-    assert.equal(coverageOf([unsupported], 'X').covered, false);
+    assert.equal(coverageOf([unsupported], 'X', { analysedContracts: ['a:X'], targetAnalysed: true }).covered, false);
+  });
+});
+
+// --------------------------------------------------------------------------- //
+// The engine contract
+// --------------------------------------------------------------------------- //
+
+describe('engine metadata contract', () => {
+  test('a result whose block fails the schema is dropped, named in the log and counted', async () => {
+    const drifted = detectorResult({
+      check: 'hookrisk-flag-divergence',
+      hookrisk: { version: '2', ruleClass: 'flag-implementation-divergence', informsDimensions: [], informsTriggers: [], isClassification: false },
+    });
+    const invented = detectorResult({
+      check: 'hookrisk-new-thing',
+      hookrisk: { version: '1', ruleClass: 'brand-new-class', informsDimensions: [], informsTriggers: [], isClassification: false },
+    });
+    const forgot = detectorResult({ check: 'hookrisk-mystery', hookrisk: undefined });
+
+    const { result, log } = await runWith({ code: 255, report: report([hookProfile(), drifted, invented, forgot, hs02('beforeSwap')]) });
+
+    assert.equal(result.status, 'ok');
+    assert.equal(result.invalidMetadata, 3);
+    assert.deepEqual(
+      result.findings.map((f) => f.ruleClass),
+      ['hook-profile', 'flag-implementation-divergence'],
+      'only conforming results are admitted',
+    );
+    const dropped = log.filter((l) => l.includes('dropped a result from'));
+    assert.equal(dropped.length, 3);
+    assert.ok(dropped.some((l) => l.includes('hookrisk-flag-divergence on MyHook') && l.includes('/version')), dropped.join('\n'));
+    assert.ok(dropped.some((l) => l.includes('hookrisk-new-thing on MyHook') && l.includes('/ruleClass')), dropped.join('\n'));
+    assert.ok(dropped.some((l) => l.includes('hookrisk-mystery on MyHook') && l.includes('no hookrisk metadata block')), dropped.join('\n'));
+    assert.ok(log.some((l) => l.includes('3 result(s) dropped for invalid metadata')));
+  });
+
+  test('nothing dropped means no invalidMetadata field at all', async () => {
+    const { result } = await runWith({ code: 255, report: report([hookProfile()]) });
+    assert.equal(result.invalidMetadata, undefined);
+  });
+
+  test('metadataErrors names the violated path', () => {
+    assert.deepEqual(metadataErrors(undefined), ['no hookrisk metadata block']);
+    assert.deepEqual(metadataErrors(hookProfile().hookrisk), []);
+    const badMetric = { ...(hookProfile().hookrisk as EngineMetadata) };
+    badMetric.metrics = { ...badMetric.metrics!, callbacksDeclared: -1 };
+    assert.ok(metadataErrors(badMetric).some((e) => e.startsWith('/metrics/callbacksDeclared')));
+    const extra = { ...(hs02('beforeSwap').hookrisk as EngineMetadata), surprise: 1 };
+    assert.ok(metadataErrors(extra).some((e) => e.includes('additional properties')));
+  });
+
+  test('the profile supplies the permission set and the analysed scope', async () => {
+    const { result, log } = await runWith({ code: 255, report: report([hookProfile(), hs01('beforeSwap', 'src/Other.sol')]) });
+    assert.deepEqual(result.permissions, PERMISSIONS);
+    assert.deepEqual(result.scope, { analysedContracts: ['src/MyHook.sol:MyHook'], targetAnalysed: true });
+    assert.ok(log.some((l) => l.includes('analysed 1 hook contract(s)') && l.includes('permissions resolved from the profile')));
+  });
+
+  test('a hook that declares no permissions yields a profile without them', async () => {
+    const { result } = await runWith({ code: 255, report: report([hookProfile('MyHook', 'src/MyHook.sol', null)]) });
+    assert.equal(result.permissions, undefined);
+    assert.equal(result.targetCoverage?.covered, true, 'no permissions is still analysed');
+    assert.equal(result.findings[0]!.permissions, undefined);
+  });
+
+  test('the profile stays in the findings as an INFO classification carrying its permissions and metrics', async () => {
+    const { result } = await runWith({ code: 255, report: report([hookProfile()]) });
+    const [profile] = result.findings;
+    assert.equal(profile!.ruleClass, 'hook-profile');
+    assert.equal(profile!.severity, 'info');
+    assert.deepEqual(profile!.permissions, PERMISSIONS);
+    assert.equal(profile!.metrics?.callbacksImplemented, 2);
+    assert.equal(profile!.location?.file, 'src/MyHook.sol');
+  });
+
+  test('scopeOf and targetPermissions read the profile anchors', () => {
+    const results = [hookProfile('A', 'src/A.sol'), hookProfile('B', 'src/B.sol'), hs02('beforeSwap')];
+    assert.deepEqual(scopeOf(results, 'src/B.sol', 'B'), { analysedContracts: ['src/A.sol:A', 'src/B.sol:B'], targetAnalysed: true });
+    assert.deepEqual(scopeOf(results, 'src/B.sol', 'A'), { analysedContracts: ['src/A.sol:A', 'src/B.sol:B'], targetAnalysed: false });
+    assert.deepEqual(targetPermissions(results, 'src/A.sol', 'A'), PERMISSIONS);
+    assert.equal(targetPermissions(results, 'src/C.sol', 'C'), undefined);
   });
 });
 
@@ -371,19 +544,28 @@ describe('normalise', () => {
     assert.deepEqual(f.function, { name: 'getHookPermissions' });
   });
 
-  test('an empty discriminator is treated as absent', () => {
+  test('an empty discriminator fails the contract rather than being treated as absent', () => {
+    // The schema says minLength 1: a detector that sends "" has a bug, and a
+    // finding whose identity is silently widened is how Orbital lost one.
     const f = normalise(
       detectorResult({
         check: 'hookrisk-flag-divergence',
-        hookrisk: { ruleClass: 'flag-implementation-divergence', informsDimensions: [], informsTriggers: [], isClassification: false, discriminator: '' },
+        hookrisk: { version: '1', ruleClass: 'flag-implementation-divergence', informsDimensions: [], informsTriggers: [], isClassification: false, discriminator: '' },
       }),
-    )!;
-    assert.equal(f.discriminator, undefined);
-    assert.equal('discriminator' in f, false);
+    );
+    assert.equal(f, null);
   });
 
   test('drops a result that carries no hookrisk metadata', () => {
     assert.equal(normalise(detectorResult({ check: 'hookrisk-mystery', hookrisk: undefined })), null);
+  });
+
+  test('drops a result whose metadata predates the versioned contract', () => {
+    const unversioned = detectorResult({
+      check: 'hookrisk-flag-divergence',
+      hookrisk: { ruleClass: 'flag-implementation-divergence', informsDimensions: [], informsTriggers: [], isClassification: false },
+    });
+    assert.equal(normalise(unversioned), null);
   });
 
   test('prefers an element outside dependencies for the anchor', () => {
