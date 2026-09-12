@@ -23,13 +23,17 @@
     "Exit codes intentionally avoid 1: a bare 1 is what an uncaught crash produces,",
     "so reserving it lets CI distinguish 'hookrisk reported a problem' from",
     "'hookrisk itself broke'. Exit code 2 is reserved for 'scan completed and the",
-    "risk gate failed', which is a successful run, not an error."
+    "risk gate failed', which is a successful run, not an error. Exit code 64 is",
+    "sysexits.h EX_USAGE: the command line itself was wrong, so no scan was even",
+    "attempted. It has no HR-E entry because there is nothing to diagnose — the",
+    "usage text is the whole message."
   ],
   "version": 1,
   "reserved": {
     "0": "scan completed, gate passed",
     "1": "uncaught internal crash (never emitted deliberately)",
-    "2": "scan completed, risk gate failed — this is a result, not an error"
+    "2": "scan completed, risk gate failed — this is a result, not an error",
+    "64": "usage: unknown command, or no command at all (sysexits.h EX_USAGE)"
   },
   "errors": [
     {
@@ -94,6 +98,22 @@
       "match": [
         "No detector found matching",
         "Unknown detector: HS-"
+      ]
+    },
+    {
+      "code": "HR-E005",
+      "title": "hookrisk cannot find its own installation",
+      "exitCode": 10,
+      "cause": "The CLI is one part of hookrisk. The differential harness is a Foundry project under `harness/` and the manifest schema and framework rubric are JSON under `schema/`, and the CLI reads all three at runtime. It finds them by walking up from its own `dist/` directory, which only works when it is run from a checkout that `make setup` has prepared. A copied `dist/`, a global `npm install` of the package alone, or a partial checkout leaves it with nothing to run.",
+      "fix": [
+        "From a hookrisk checkout, run `make setup`. It creates the virtualenv, materialises the pinned Solidity dependencies into `harness/lib/`, registers the detectors and builds the CLI.",
+        "If the CLI lives somewhere else on purpose, point it at the checkout: `export HOOKRISK_HOME=/path/to/hookrisk`.",
+        "Confirm the directory really is one: it must contain both `harness/foundry.toml` and `schema/`.",
+        "hookrisk is not published to npm today; see docs/ARCHITECTURE.md for what a split into a standalone package would require."
+      ],
+      "match": [
+        "cannot find its own installation",
+        "HOOKRISK_HOME"
       ]
     },
     {

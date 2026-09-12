@@ -23,6 +23,7 @@ run"*. A CI job can branch on this without parsing output.
 | `0` | scan completed, gate passed |
 | `1` | uncaught internal crash (never emitted deliberately) |
 | `2` | scan completed, risk gate failed — this is a result, not an error |
+| `64` | usage: unknown command, or no command at all (sysexits.h EX_USAGE) |
 
 Error exit codes are grouped: `1x` environment, `2x` configuration,
 `3x` compilation and static analysis, `4x` harness execution, `5x` network and
@@ -49,6 +50,7 @@ problems in one shot and tells you which are fatal:
 | [`HR-E002`](#hr-e002) | `10` | Slither is not installed or not importable |
 | [`HR-E003`](#hr-e003) | `10` | Python version is unsupported |
 | [`HR-E004`](#hr-e004) | `10` | The hookrisk Slither plugin is installed but not registered |
+| [`HR-E005`](#hr-e005) | `10` | hookrisk cannot find its own installation |
 | [`HR-E101`](#hr-e101) | `20` | hookrisk.toml is missing a required declared dimension |
 | [`HR-E102`](#hr-e102) | `20` | Target hook could not be resolved |
 | [`HR-E103`](#hr-e103) | `20` | Declared fee bound is missing while the hook can alter fees |
@@ -167,6 +169,32 @@ Exit code `10`.
 ```text
 No detector found matching
 Unknown detector: HS-
+```
+
+</details>
+
+---
+
+### HR-E005
+
+**hookrisk cannot find its own installation**
+
+Exit code `10`.
+
+**Why this happens.** The CLI is one part of hookrisk. The differential harness is a Foundry project under `harness/` and the manifest schema and framework rubric are JSON under `schema/`, and the CLI reads all three at runtime. It finds them by walking up from its own `dist/` directory, which only works when it is run from a checkout that `make setup` has prepared. A copied `dist/`, a global `npm install` of the package alone, or a partial checkout leaves it with nothing to run.
+
+**How to fix it.**
+
+1. From a hookrisk checkout, run `make setup`. It creates the virtualenv, materialises the pinned Solidity dependencies into `harness/lib/`, registers the detectors and builds the CLI.
+2. If the CLI lives somewhere else on purpose, point it at the checkout: `export HOOKRISK_HOME=/path/to/hookrisk`.
+3. Confirm the directory really is one: it must contain both `harness/foundry.toml` and `schema/`.
+4. hookrisk is not published to npm today; see docs/ARCHITECTURE.md for what a split into a standalone package would require.
+
+<details><summary>Raw output that maps to this code</summary>
+
+```text
+cannot find its own installation
+HOOKRISK_HOME
 ```
 
 </details>

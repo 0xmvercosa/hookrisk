@@ -9,9 +9,12 @@ name: Dogfood
 # the plugin does not register, paths resolve elsewhere. Running it on ourselves
 # is the cheapest way to find that out before a user does.
 #
-# It deliberately scans both a clean hook and a hook with a planted bug, and
-# asserts opposite outcomes. An action that passes everything is
-# indistinguishable from an action that does nothing.
+# It deliberately scans three fixtures and asserts three different outcomes: a
+# clean hook passes, a hook with a planted bug fails the gate, and a hook the
+# harness cannot even stand up comes back inconclusive rather than clean. An
+# action that passes everything is indistinguishable from an action that does
+# nothing — and an action that only ever produces pass/fail cannot express the
+# third answer a security tool most needs: "I did not measure this".
 
 on:
   push:
@@ -34,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build fixtures
-        run: ./scripts/fetch-deps.sh
+        run: make deps
 
       - name: hookrisk
         id: scan
@@ -65,7 +68,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build fixtures
-        run: ./scripts/fetch-deps.sh
+        run: make deps
 
       # `fail-on-gate: false` so the step reports rather than stopping the job;
       # the assertion below is what decides the outcome. Without this the job
@@ -91,3 +94,75 @@ jobs:
             echo "::error::the action passed a hook with unprotected callbacks"; exit 1; }
           test "${{ steps.scan.outputs.findings }}" -gt "0" || {
             echo "::error::the action reported no findings on the positive fixture"; exit 1; }
+
+  unrunnable-hook:
+    name: Action on a hook the harness cannot stand up (must be inconclusive, not clean)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build fixtures
+        run: make deps
+
+      # The third outcome, and the one the tool used to get wrong. RefusingHook
+      # reverts in `beforeInitialize`, so the twin-pool fixture cannot create
+      # the hooked pool with either a static or a dynamic fee and `setUp()`
+      # reverts before a single sequence runs. Nothing about the hook was
+      # observed.
+      #
+      # hookrisk shipped reporting that as `harness ok` with three passed
+      # invariants — "no counterexample was found" and "nothing was tried" are
+      # indistinguishable from the outside, and the version that conflated them
+      # gave a hook nobody could execute a clean bill of health. So this job is
+      # not "the scan survives a broken hook"; it is "the scan refuses to
+      # pretend it measured one".
+      #
+      # `skip-dynamic: false` on purpose: the dynamic layer running and failing
+      # is the whole subject.
+      - name: hookrisk
+        id: scan
+        uses: ./action
+        with:
+          target: src/hooks/RefusingHook.sol:RefusingHook
+          working-directory: harness
+          fail-on-gate: 'false'
+          skip-dynamic: 'false'
+          comment-on-pr: 'false'
+          upload-sarif: 'false'
+
+      - name: The harness must have failed and nothing may read as passed
+        working-directory: harness
+        run: |
+          set -euo pipefail
+          jq -r '.coverage.harnessStatus, ([.invariants[] | .id + "=" + .status] | join(" "))' hook-risk.json
+
+          jq -e '.coverage.harnessStatus == "failed"' hook-risk.json >/dev/null || {
+            echo "::error::harnessStatus is not \"failed\" for a hook whose setUp reverted"; exit 1; }
+
+          # Every invariant, not just "none failed": `skipped` would mean the
+          # harness was never asked, and `passed` would be the original bug.
+          jq -e '[.invariants[] | select(.status != "inconclusive")] | length == 0' hook-risk.json >/dev/null || {
+            echo "::error::an invariant is something other than inconclusive after setUp reverted"; exit 1; }
+
+          # The hook's own revert has to survive v4's ERC-7751 wrapper and reach
+          # the reason, or the operator is told the harness broke rather than
+          # that the hook refused.
+          jq -e '.engines[] | select(.engine == "harness") | .reason | test("HR-E304")' hook-risk.json >/dev/null || {
+            echo "::error::the harness failure did not carry HR-E304"; exit 1; }
+
+      # The exit code is a published contract (docs/ARCHITECTURE.md), so it is
+      # asserted directly rather than inferred from `gate-passed`. 2 is not
+      # arbitrary here: the dynamic dimensions are unmeasured, the tier is
+      # undetermined between low and high, and an undetermined tier above the
+      # configured maximum is a gate failure. A hook that cannot be executed
+      # does not pass by default.
+      - name: The scan must exit 2
+        working-directory: harness
+        run: |
+          set +e
+          node ../cli/dist/cli.js scan src/hooks/RefusingHook.sol:RefusingHook --log-json
+          status=$?
+          set -e
+          test "$status" = "2" || { echo "::error::expected exit 2, got $status"; exit 1; }
+          test "${{ steps.scan.outputs.gate-passed }}" = "false" || {
+            echo "::error::the action reported the gate as passed"; exit 1; }

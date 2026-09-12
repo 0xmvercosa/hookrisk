@@ -185,7 +185,54 @@ Three things the manifest records that a report normally omits:
 | `0` | Scan completed, gate passed |
 | `2` | Scan completed, **gate failed** — a result, not an error |
 | `10`–`70` | hookrisk could not run; the code identifies why |
+| `64` | Usage: unknown or missing command. Nothing was scanned |
 | `1` | Never emitted deliberately — reserved for an uncaught crash |
 
 Reserving `1` lets CI distinguish "hookrisk reported a problem" from "hookrisk
 itself broke". Only one of those should page someone.
+
+`64` is `sysexits.h`'s `EX_USAGE` and is the one code with no `HR-E` entry
+behind it: the command line was wrong, so there is nothing to diagnose and the
+usage text is the whole message. `hookrisk --help` exits `0` — asking for help
+succeeds; being given nothing to do does not.
+
+## Streams
+
+| Stream | Carries |
+|---|---|
+| stdout | The result: the summary, or the manifest under `--json`. Never both |
+| stderr | Progress (`--verbose`, or JSON lines under `--log-json`) and errors |
+
+Engines and the harness run concurrently — they are independent subprocesses
+over the same already-compiled sources, so a scan costs the longer of the two
+rather than their sum, and `--timeout` is a per-engine budget that each gets in
+full. Their progress therefore interleaves, which is why `--log-json` tags every
+line with a `stage` (`project`, `engine:hookrisk`, `engine:blocksec`, `harness`,
+`reconcile`, `scan`) and a `runId` shared by every line of one scan. The order
+of the *results* is not left to the scheduler: engine rows keep their declared
+order and the harness follows, so two runs over one target produce identical
+artifacts.
+
+## Installation layout
+
+The CLI is not self-contained and is not published to npm. It shells out to the
+Foundry project in `harness/` and reads `schema/hook-risk.schema.json` and
+`schema/framework-rubric.json` at runtime, so it only works from a checkout that
+`make setup` has prepared. It finds those two directories in this order:
+
+1. `HOOKRISK_HOME`, when set — for a CLI deliberately installed away from the
+   repository, such as inside a container image.
+2. Two levels up from its own `dist/`, which is the monorepo layout.
+
+A candidate counts only if it holds **both** `harness/foundry.toml` and
+`schema/`; anything else fails immediately with `HR-E005` naming what was
+missing. That check exists because the previous behaviour was worse than a
+crash: a CLI with no harness reported the dynamic layer as `skipped` in an
+engine row and produced a manifest anyway, so a broken install and a deliberate
+`--skip-dynamic` looked identical.
+
+Splitting the CLI into a publishable package means giving the harness and the
+schemas a distribution of their own — vendoring `harness/` into the tarball
+along with its pinned `lib/`, or shipping them as a second package the CLI
+resolves. Neither is free and neither is needed while the supported entry point
+is `make setup` in a checkout.

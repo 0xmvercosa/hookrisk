@@ -30,9 +30,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: ./scripts/fetch-deps.sh
-      - run: python scripts/gen_hooks_spec.py --core harness/lib/v4-core --check
-      - run: python scripts/gen_error_docs.py --check
+      - run: make deps
+      # Same target a contributor runs locally, so "green here, red there" is
+      # not a thing that can happen from CI holding the check differently.
+      - run: make check-generated
 
   harness:
     name: Harness (${{ matrix.suite }})
@@ -56,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
-      - run: ./scripts/fetch-deps.sh
+      - run: make deps
       - name: forge test
         working-directory: harness
         run: forge test ${{ matrix.filter }} -vv
@@ -75,10 +76,13 @@ jobs:
         run: npm ci
       - working-directory: cli
         run: npm run typecheck
+      # `make test-cli`, not a hand-written `npm test`, so every new test file
+      # is picked up here the moment it is picked up locally — the runner globs
+      # dist/**/*.test.js rather than naming suites.
+      #
       # Includes the framework's own four worked examples from section 5. If one
       # fails, our reading of the framework is wrong, not the test.
-      - working-directory: cli
-        run: npm test
+      - run: make test-cli
 
   detectors:
     name: Detectors (corpus gates)
@@ -89,35 +93,28 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: |
-          python -m pip install --quiet 'slither-analyzer>=0.11.5,<0.12'
-          python -m pip install --quiet ./detectors
-      - run: ./scripts/fetch-deps.sh
+      # The virtualenv is not optional here. `make test-corpus` invokes Slither
+      # through `$(abspath $(SLITHER))`, and that only resolves to a real path
+      # when SLITHER is `.venv/bin/slither` — `abspath` on a bare `slither`
+      # found via PATH yields `$CURDIR/slither`, which does not exist. Building
+      # the same venv `make setup` builds keeps CI and a laptop on one code
+      # path. `install-detectors` also asserts the plugin registered (HR-E004),
+      # which is the failure that otherwise reads as a clean scan.
+      - run: make venv install-detectors deps
 
-      - name: Detectors are registered
-        run: slither --list-detectors | grep -q 'hookrisk-'
-
-      # Two gates, and the second matters more. Missing a real bug is bad;
-      # flagging correct code is what gets a security tool switched off. The
-      # negative corpus compiles OpenZeppelin's production AntiSandwichHook and
-      # LiquidityPenaltyHook, so this is not a toy control.
-      - name: Positive corpus must fire
-        working-directory: corpus
-        run: |
-          set -euo pipefail
-          out=$(slither src/bad --detect hookrisk-unprotected-callback,hookrisk-flag-divergence,hookrisk-custom-accounting --exclude-dependencies 2>&1 || true)
-          echo "$out" | tail -20
-          echo "$out" | grep -qE '[1-9][0-9]* result\(s\) found' || {
-            echo "::error::detectors found nothing in the positive corpus"; exit 1; }
-
-      - name: Negative corpus must stay silent
-        working-directory: corpus
-        run: |
-          set -euo pipefail
-          out=$(slither src/good --detect hookrisk-unprotected-callback,hookrisk-flag-divergence,hookrisk-custom-accounting --exclude-dependencies 2>&1 || true)
-          echo "$out" | tail -20
-          echo "$out" | grep -qE '0 result\(s\) found' || {
-            echo "::error::false positive on the negative corpus"; exit 1; }
+      # `make test-corpus`, one target, rather than the two hand-rolled greps
+      # this job used to carry. Those had drifted: they named three detectors of
+      # the five that exist, never ran the legacy gate, never ran
+      # detectors/tests, and decided the outcome by grepping Slither's
+      # human-readable summary for "0 result(s) found" — which a compile failure
+      # also produces. CI was green on a scan that analysed nothing.
+      #
+      # The target gates on `.success` in Slither's JSON first, then on the
+      # finding counts, and finishes with the 17 finding-level tests. Its three
+      # gates are asymmetric on purpose (fire on bad, silent on good, admit
+      # legacy is unreadable); the reasoning is in the Makefile next to them.
+      - name: Corpus gates and detector tests
+        run: make test-corpus
 
   end-to-end:
     name: End-to-end scan
@@ -133,7 +130,7 @@ jobs:
           node-version: '20'
       - run: |
           python -m pip install --quiet 'slither-analyzer>=0.11.5,<0.12' ./detectors
-          ./scripts/fetch-deps.sh
+          make deps
           cd cli && npm ci --silent && npm run --silent build
 
       # A correct hook: no findings, invariants hold, gate passes, exit 0.

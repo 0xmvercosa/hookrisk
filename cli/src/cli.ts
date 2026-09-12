@@ -10,6 +10,7 @@
  *   0   scan completed, gate passed
  *   2   scan completed, gate failed — a result, not an error
  *   10+ hookrisk could not run; the code identifies why
+ *   64  usage: the command line itself was wrong, so no scan was attempted
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -22,10 +23,12 @@ import {
   loadConfig,
   type HookriskConfig,
 } from './config.js';
-import { HookriskError, supportsColour } from './errors.js';
+import { EXIT_GATE_FAILED, HookriskError, errorCodeFor, supportsColour } from './errors.js';
 import { BlockSecEngine } from './engines/blocksec.js';
 import { mergeEngineResults } from './engines/dedupe.js';
 import { SlitherEngine } from './engines/slither.js';
+import { resolveHome } from './home.js';
+import { createLogger } from './log.js';
 import {
   buildManifest,
   renderMarkdown,
@@ -33,14 +36,23 @@ import {
   type HarnessSummary,
   type InvariantResult,
 } from './manifest.js';
-import { parseDeclaredPermissions, permissionsFrom, resolveProject, runHarness } from './harness.js';
+import {
+  parseDeclaredPermissions,
+  permissionsFrom,
+  resolveProject,
+  runHarness,
+  type HarnessOutcome,
+} from './harness.js';
 import { toSarif } from './sarif.js';
 import { deriveScoringInput } from './scoring/derive.js';
 import { loadRubric } from './scoring/rubric.js';
 import { score } from './scoring/score.js';
-import type { Engine, EngineContext, EngineResult } from './types.js';
+import type { Engine, EngineResult } from './types.js';
 
 const VERSION = '0.1.0';
+
+/** Wrong command line. sysexits.h EX_USAGE; see `reserved` in errors/catalog.json. */
+const EXIT_USAGE = 64;
 
 interface ScanArgs {
   target?: string;
@@ -54,6 +66,7 @@ interface ScanArgs {
   noValidate: boolean;
   verbose: boolean;
   json: boolean;
+  logJson: boolean;
 }
 
 function usage(): string {
@@ -75,14 +88,31 @@ SCAN OPTIONS
   --skip-dynamic      Do not run the differential harness
   --no-gate           Report without failing on the configured thresholds
   --no-validate       Emit the manifest even if it fails schema validation
-  --verbose           Print engine invocations and progress
-  --json              Print the manifest to stdout instead of a summary
+  --verbose           Print engine invocations and progress to stderr
+  --log-json          Emit the progress log to stderr as one JSON object per
+                      line, every line carrying the run id. Implies verbosity.
+  --json              Print the manifest to stdout instead of the summary
 
 OUTPUT
   hook-risk.json      Machine-readable manifest, validated against
                       schema/hook-risk.schema.json
   HOOK_RISK.md        Human report
   hookrisk.sarif      For GitHub code scanning
+
+  The summary goes to stdout; progress and errors go to stderr. With --json,
+  stdout carries the manifest and nothing else.
+
+EXIT CODES
+  0                   Scan completed, gate passed
+  2                   Scan completed, gate failed — a result, not an error
+  10-70               hookrisk could not run; the code identifies why, see
+                      docs/TROUBLESHOOTING.md
+  64                  Usage: unknown or missing command; nothing was scanned
+  1                   Never emitted deliberately — an uncaught crash
+
+ENVIRONMENT
+  HOOKRISK_HOME       hookrisk checkout holding harness/ and schema/. Defaults
+                      to the repository this CLI was built in.
 
 Full documentation: https://github.com/0xmvercosa/hookrisk
 `;
@@ -104,6 +134,7 @@ function parseScanArgs(argv: string[]): ScanArgs {
     noValidate: false,
     verbose: false,
     json: false,
+    logJson: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -144,6 +175,9 @@ function parseScanArgs(argv: string[]): ScanArgs {
         break;
       case '--verbose':
         args.verbose = true;
+        break;
+      case '--log-json':
+        args.logJson = true;
         break;
       case '--json':
         args.json = true;
@@ -202,12 +236,24 @@ function resolveTarget(target: string | undefined, projectRoot: string): {
 // --------------------------------------------------------------------------- //
 
 async function commandScan(argv: string[]): Promise<number> {
+  const startedAt = Date.now();
   const args = parseScanArgs(argv);
   const { sourceFile, contractName } = resolveTarget(args.target, args.projectRoot);
 
-  const log = (message: string): void => {
-    if (args.verbose) process.stderr.write(`  ${message}\n`);
-  };
+  const log = createLogger({ json: args.logJson, verbose: args.verbose });
+
+  // Before anything else: the CLI needs a harness project and a schema
+  // directory, and neither is inside the package. Resolving them up front turns
+  // "installed wrong" from a scan that quietly skips its dynamic half into one
+  // loud HR-E005 — see cli/src/home.ts.
+  const home = resolveHome();
+  log.event('info', 'scan', `scan: ${sourceFile}:${contractName} run=${log.runId}`, {
+    target: `${sourceFile}:${contractName}`,
+    projectRoot: args.projectRoot,
+    home: home.root,
+    homeSource: home.source,
+    toolVersion: VERSION,
+  });
 
   let config: HookriskConfig;
   if (existsSync(args.configPath)) {
@@ -233,36 +279,93 @@ async function commandScan(argv: string[]): Promise<number> {
   // the static engines (solc version) and the harness (artifact path) depend
   // on it, and guessing either is how a built project gets told to build.
   const project = await resolveProject(args.projectRoot, sourceFile, contractName);
-  for (const note of project.notes) log(`project: ${note}`);
-  log(
+  const projectLog = log.stage('project');
+  for (const note of project.notes) projectLog(`project: ${note}`);
+  projectLog(
     `project: out=${project.artifactDir} solc=${project.solcVersion} (${project.solcSource})` +
       (project.artifactPath ? ` artifact=${project.artifactPath}` : ` artifact: ${project.artifactReason}`),
   );
 
-  const context: EngineContext = {
-    projectRoot: args.projectRoot,
-    sourceFile,
-    contractName,
-    solcVersion: project.solcVersion,
-    timeoutMs: args.timeoutMs,
-    log,
-  };
+  // The dynamic layer executes the hook rather than reading it, so it needs the
+  // permission set to place the hook at a flag-bearing address. Null when this
+  // file inherits getHookPermissions(); the harness then derives the flags from
+  // the compiled runtime code and reports what it found.
+  const permissions = parseDeclaredPermissions(readFileSync(resolve(args.projectRoot, sourceFile), 'utf8'));
 
-  const engineResults: EngineResult[] = [];
+  // --- run the engines and the harness together ---
+  //
+  // They are independent subprocesses over the same already-compiled sources:
+  // Slither parses the AST, the harness drives forge. Sequentially a scan cost
+  // the sum; concurrently it costs the longer of the two, which on a real hook
+  // is the harness by an order of magnitude. `--timeout` is a *per-engine*
+  // budget and stays one — each gets the full value, because a shared budget
+  // would make one engine's slowness look like another's timeout.
+  //
+  // Ordering is not left to the scheduler: results are unpacked back into the
+  // declared engine order below, then the harness, so two runs over the same
+  // target produce byte-identical artifacts.
   const engineMeta = new Map<string, { displayName: string; upstream?: { url: string; license: string } }>();
-  let uncoveredFunctions: Array<{ contract: string; function: string; reason: string }> = [];
-
   for (const engine of engines) {
     engineMeta.set(engine.id, {
       displayName: engine.displayName,
       ...(engine.upstream ? { upstream: engine.upstream } : {}),
     });
-    const result = await engine.run(context);
-    engineResults.push(result);
-    if (engine instanceof SlitherEngine) {
-      uncoveredFunctions = engine.uncoveredFunctions;
-    }
   }
+
+  const enginePromises = engines.map((engine) =>
+    engine.run({
+      projectRoot: args.projectRoot,
+      sourceFile,
+      contractName,
+      solcVersion: project.solcVersion,
+      timeoutMs: args.timeoutMs,
+      // Per engine, so an interleaved JSON log says which subprocess spoke.
+      log: log.stage(`engine:${engine.id}`),
+    }),
+  );
+
+  const harnessPromise: Promise<HarnessOutcome | null> = args.skipDynamic
+    ? Promise.resolve(null)
+    : runHarness({
+        project,
+        sourceFile,
+        contractName,
+        permissions,
+        ...(config.harness.constructorArgs ? { constructorArgs: config.harness.constructorArgs } : {}),
+        maxFeeBips: config.declared.maxFeeBips ?? 0,
+        timeoutMs: args.timeoutMs,
+        harnessRoot: home.harnessRoot,
+        log: log.stage('harness'),
+      });
+
+  // allSettled, not Promise.all: `all` hands back control on the first
+  // rejection, and returning from the scan while forge is still fuzzing leaves
+  // an orphaned subprocess writing run records into harness/out that a later
+  // scan could read. Everything settles, then the first failure is rethrown —
+  // so a broken engine still fails the whole scan, just not early.
+  const settled = await Promise.allSettled([...enginePromises, harnessPromise]);
+  const rejection = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected');
+  if (rejection) throw rejection.reason;
+
+  const engineResults: EngineResult[] = [];
+  let uncoveredFunctions: Array<{ contract: string; function: string; reason: string }> = [];
+  engines.forEach((engine, index) => {
+    const result = (settled[index] as PromiseFulfilledResult<EngineResult>).value;
+    engineResults.push(result);
+    // Read off the instance rather than the result: `uncoveredFunctions` is the
+    // HR-E205 list, and it has to reach the manifest or a partial scan reads as
+    // a complete one.
+    if (engine instanceof SlitherEngine) uncoveredFunctions = engine.uncoveredFunctions;
+    const errorCode = errorCodeFor(result.reason);
+    log.event(result.status === 'failed' ? 'error' : 'info', `engine:${engine.id}`,
+      `${engine.id}: ${result.status}${result.reason ? ` — ${result.reason}` : ''}`,
+      {
+        status: result.status,
+        durationMs: result.durationMs,
+        findings: result.findings.length,
+        ...(errorCode ? { errorCode } : {}),
+      });
+  });
 
   if (engines.length === 0) {
     engineResults.push({
@@ -276,10 +379,10 @@ async function commandScan(argv: string[]): Promise<number> {
     engineMeta.set('hookrisk', { displayName: 'hookrisk Slither detectors' });
   }
 
-  const { findings, stats } = mergeEngineResults(engineResults, log);
+  const { findings, stats } = mergeEngineResults(engineResults, log.stage('reconcile'));
 
   // --- score ---
-  const rubric = loadRubric();
+  const rubric = loadRubric(home.rubric);
   const scoringInput = deriveScoringInput({
     findings,
     engineResults,
@@ -289,28 +392,13 @@ async function commandScan(argv: string[]): Promise<number> {
   const scored = score(scoringInput, rubric);
 
   // --- invariants ---
-  // The dynamic layer executes the hook rather than reading it, so it needs the
-  // permission set to place the hook at a flag-bearing address. Null when this
-  // file inherits getHookPermissions(); the harness then derives the flags from
-  // the compiled runtime code and reports what it found.
-  const permissions = parseDeclaredPermissions(readFileSync(resolve(args.projectRoot, sourceFile), 'utf8'));
-
+  const outcome = (settled[engines.length] as PromiseFulfilledResult<HarnessOutcome | null>).value;
   let invariants: InvariantResult[] = [];
   let harness: HarnessSummary = { version: 'n/a', status: 'skipped', reason: '--skip-dynamic', durationMs: 0 };
   const permissionsSection: Record<string, unknown> = {};
   if (permissions) permissionsSection.fromSource = permissions;
 
-  if (!args.skipDynamic) {
-    const outcome = await runHarness({
-      project,
-      sourceFile,
-      contractName,
-      permissions,
-      ...(config.harness.constructorArgs ? { constructorArgs: config.harness.constructorArgs } : {}),
-      maxFeeBips: config.declared.maxFeeBips ?? 0,
-      timeoutMs: args.timeoutMs,
-      log,
-    });
+  if (outcome) {
     invariants = outcome.invariants;
     harness = {
       version: outcome.version,
@@ -318,9 +406,15 @@ async function commandScan(argv: string[]): Promise<number> {
       ...(outcome.reason ? { reason: outcome.reason } : {}),
       durationMs: outcome.durationMs,
     };
-    if (outcome.status !== 'ok') {
-      log(`harness: ${outcome.status} — ${outcome.reason ?? ''}`);
-    }
+    const harnessErrorCode = errorCodeFor(outcome.reason);
+    log.event(outcome.status === 'failed' ? 'error' : 'info', 'harness',
+      `harness: ${outcome.status}${outcome.reason ? ` — ${outcome.reason}` : ''}`,
+      {
+        status: outcome.status,
+        durationMs: outcome.durationMs,
+        invariants: Object.fromEntries(outcome.invariants.map((i) => [i.id, i.status])),
+        ...(harnessErrorCode ? { errorCode: harnessErrorCode } : {}),
+      });
     if (outcome.run) {
       // What the harness actually deployed under. Recorded even when it agrees
       // with the source declaration: this is the set the PoolManager obeyed.
@@ -344,7 +438,7 @@ async function commandScan(argv: string[]): Promise<number> {
       mode: 'source',
       contractName,
       sourceFile,
-      solcVersion: context.solcVersion,
+      solcVersion: project.solcVersion,
       artifactDir: relative(args.projectRoot, project.artifactDir) || '.',
       projectConfigSource: project.configSource,
     },
@@ -363,7 +457,7 @@ async function commandScan(argv: string[]): Promise<number> {
 
   if (!args.noValidate) {
     try {
-      validateManifest(manifest);
+      validateManifest(manifest, home.manifestSchema);
     } catch (err) {
       // Write the rejected manifest so it can be attached to a bug report.
       mkdirSync(args.outDir, { recursive: true });
@@ -389,14 +483,34 @@ async function commandScan(argv: string[]): Promise<number> {
   }
 
   const gate = manifest.gate as { passed?: boolean } | undefined;
-  return gate && gate.passed === false ? 2 : 0;
+  const exitCode = gate && gate.passed === false ? EXIT_GATE_FAILED : 0;
+  log.event('info', 'scan', `scan: finished in ${Date.now() - startedAt}ms, exit ${exitCode}`, {
+    durationMs: Date.now() - startedAt,
+    exitCode,
+    tier: scored.tier.id,
+    total: scored.total,
+    inconclusive: scored.inconclusive,
+    findings: findings.length,
+    ...(gate ? { gatePassed: gate.passed === true } : {}),
+  });
+  return exitCode;
 }
 
+/**
+ * The end-of-scan summary.
+ *
+ * On **stdout**, deliberately. It used to go to stderr along with the progress
+ * log, which left `hookrisk scan … > report.txt` producing an empty file and
+ * made the tool look broken in every pipeline that redirects the two streams
+ * separately. The split is now the conventional one: stdout is the result,
+ * stderr is the commentary. Under `--json` the manifest takes stdout instead
+ * and this is not called at all, so stdout is never two things at once.
+ */
 function printSummary(
   manifest: Record<string, unknown>,
   paths: { manifestPath: string; reportPath: string; sarifPath: string },
 ): void {
-  const colour = supportsColour();
+  const colour = supportsColour(process.stdout);
   const bold = colour ? '[1m' : '';
   const dim = colour ? '[2m' : '';
   const reset = colour ? '[0m' : '';
@@ -407,7 +521,7 @@ function printSummary(
   const engines = (manifest.engines ?? []) as Array<Record<string, unknown>>;
   const gate = manifest.gate as { passed?: boolean; failures?: string[] } | undefined;
 
-  const out = process.stderr;
+  const out = process.stdout;
   out.write('\n');
   out.write(
     `${bold}${String(scored.tier).toUpperCase()} risk${reset}  ${scored.total}/33` +
@@ -537,11 +651,14 @@ async function main(): Promise<number> {
     case '--help':
     case '-h':
     case 'help':
+      // Asking for help succeeds; being given nothing to do does not. 64 is
+      // sysexits.h EX_USAGE — see `reserved` in errors/catalog.json and the
+      // exit code table in docs/ARCHITECTURE.md.
       process.stderr.write(usage());
-      return command === undefined ? 64 : 0;
+      return command === undefined ? EXIT_USAGE : 0;
     default:
       process.stderr.write(`Unknown command \`${command}\`.\n\n${usage()}`);
-      return 64;
+      return EXIT_USAGE;
   }
 }
 
