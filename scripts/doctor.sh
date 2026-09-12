@@ -63,7 +63,7 @@ done
 
 if [[ -n "$SLITHER" ]]; then
   ok "slither" "$($SLITHER --version 2>&1 | head -1) ${DIM}($SLITHER)${RESET}"
-  if $SLITHER --list-detectors 2>/dev/null | grep -q 'HS-'; then
+  if $SLITHER --list-detectors 2>/dev/null | grep -q 'hookrisk-'; then
     ok "hookrisk detectors" "registered"
   else
     soft "hookrisk detectors" "not registered — run 'make install-detectors' (HR-E004)"

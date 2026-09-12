@@ -9,10 +9,15 @@ SHELL := /bin/bash
 
 # Prefer the repo-local virtualenv when it exists, so a contributor who ran
 # `make venv` does not also have to remember to activate it.
+#
+# Recursively expanded (`=`, not `:=`) on purpose: with `:=` these resolve once
+# at parse time, before the `venv` target has created .venv, so a fresh
+# `make setup` installs the detectors into the system interpreter and fails
+# under PEP 668 (externally-managed-environment) on the very first run.
 VENV      := .venv
-PYTHON    := $(shell [ -x $(VENV)/bin/python ] && echo $(VENV)/bin/python || echo python3)
-PIP       := $(shell [ -x $(VENV)/bin/pip ] && echo $(VENV)/bin/pip || echo pip3)
-SLITHER   := $(shell [ -x $(VENV)/bin/slither ] && echo $(VENV)/bin/slither || echo slither)
+PYTHON    = $(shell [ -x $(VENV)/bin/python ] && echo $(VENV)/bin/python || echo python3)
+PIP       = $(shell [ -x $(VENV)/bin/pip ] && echo $(VENV)/bin/pip || echo pip3)
+SLITHER   = $(shell [ -x $(VENV)/bin/slither ] && echo $(VENV)/bin/slither || echo slither)
 
 DETECTOR_ARGS := hookrisk-unprotected-callback,hookrisk-flag-divergence,hookrisk-custom-accounting
 
