@@ -9,7 +9,7 @@ is still open. Everything below is checkable against the branch.
 | | |
 |---|---|
 | Branch | `feat/hackathon-p0`, pushed to `origin` = `0xmvercosa/hookrisk` (write access granted 2026-09-12; the local branch tracks it) and mirrored to the private backup remote `mine` = `github.com/rafaelzochling/hookrisk`. `main` is the untouched upstream state. |
-| Environment | `make setup` then `make test`. Expected green: 274 CLI tests, 45 harness tests (1 skipped), 29 detector tests, 3 corpus gates. `./scripts/doctor.sh` must show the detectors registered. |
+| Environment | `make setup` then `make test`. Expected green after the fourth pass: 298+ CLI tests, 45+ harness tests (1 skipped), 29+ detector tests, 3 corpus gates. `./scripts/doctor.sh` must show the detectors registered. |
 | Narrative | `HACKATHON.md` (what was found, what changed in two passes, limits) |
 | Per-change notes | `notes-A.md` … `notes-I.md` (A–E pass 1, F–I pass 2). Each has a "How to demo", "Caveats" and "Integrator" section. |
 | Demo | `DEMO_RUNBOOK.md` (nine verified steps) and `demo.sh <hookrisk-root> <clones-root>` (about 90 s) |
@@ -70,6 +70,19 @@ and `maxFeeBips = 10` in its `hookrisk.toml` (copy is in
   mounted; test BlockSec on `harness/` or a real project.
 - **Monorepo install only.** `cli/package.json` is `private`; the CLI locates
   `harness/` and `schema/` relative to `dist/` or via `HOOKRISK_HOME`.
+- **Deployed mode may not decode an address's permission bits until it knows
+  which PoolManager it is talking to.** `hooks_spec.FLAG_BITS` is the final v4
+  layout. Unichain's preview PoolManager (`0x1F98400…0004`) is a different
+  deployment whose ten callback flags decode in the **reverse** order, and whose
+  four returns-delta positions match neither layout; hookguard measured 17 of 18
+  hooks agreeing with the reversed reading there against 1 of 18 with ours. So
+  deployed mode needs a per-chain `PoolManager address -> bit layout` table and
+  a `permissionBitLayout` field recorded on the target *before* any address is
+  decoded, plus a refusal to decode when the PoolManager is unknown. Publishing
+  a confidently wrong permission set is worse than publishing none: HS-02's
+  whole value is that the three permission sources are compared, and a
+  mis-decoded fourth source would manufacture divergences that do not exist.
+  (`docs/hackathon/research/hookguard.md` §4.)
 
 ## Gotchas that cost time
 
@@ -119,20 +132,94 @@ never analysed (a `coverage.targetAnalysed` field would settle it); wrapper
 hooks that require `fee == 0` (WETHHook) cannot be stood up and the message
 implies constructor arguments would fix it.
 
+## Deployed mode design
+
+Deployed mode is still schema-only (`target.address`, `chainId`, `codehash` and
+address-bit decoding are specified and unimplemented). The research pass fixed
+its shape; this is the design to build against.
+
+1. **Seed from the registry, not from a crawl.** Uniswap's `hooklist` is 116
+   deployed hooks with declared flags and metadata — an authoritative, small,
+   attributable starting set. hookguard's census puts registry coverage at
+   1.24% of the hooks that have ever emitted `Initialize` on Unichain, so the
+   registry is a seed, never a denominator.
+2. **Source via Sourcify**, falling back to the block explorer, then to
+   nothing. Only about **17% of the busiest off-registry hooks publish source
+   at all**, which is the hard ceiling on everything the detectors can do; the
+   honest output for the other 83% is a bytecode-only assessment that says so,
+   not a clean report.
+3. **First check: address bits versus `getHookPermissions()`.** This is the one
+   check that only deployed mode can make — the address is what the PoolManager
+   obeys, and the declaration is what the author intended. It is also the
+   check the bit-layout landmine above breaks, so it ships with the layout
+   table or not at all. It slots into the existing `permissions` section as
+   `fromAddress`, next to `fromSource`, `fromEngine` and `fromRuntime`, and
+   into HS-02's divergence kinds, which already reserve
+   `address-disagrees-with-source`.
+4. **Bind the manifest to the codehash.** `target.codehash` already exists and
+   the report already prints "this report describes something that no longer
+   exists" when the code changes. Deployed mode makes that binding real:
+   `eth_getCode` at a pinned block, hashed, recorded with the chain id and the
+   block number.
+5. **Measure upgradeability from bytecode, without Docker.** hookguard's
+   bytecode layer is the model: read the EIP-1967 implementation slot with
+   `eth_getStorageAt`, match the EIP-1167 minimal-proxy pattern, and classify
+   each `DELEGATECALL` target as constant (immutable library) or storage-derived
+   (upgradeable) by walking a short instruction window back from the call. That
+   yields `upgradeable-hook` and `selfdestruct` — the two classes hookrisk
+   currently gets only from BlockSec's 1.2 GB amd64 image — from an RPC call and
+   a disassembler, which is what makes them affordable in CI. The same pass
+   gives codehash clone families, so one assessment can cover every byte-identical
+   deployment.
+6. **Deployed mode does not retire the harness.** It forks at the pinned block
+   and runs the same twin-pool comparison against the real hook, which is the
+   only way the probes (EOA guard, exclusivity, selectors) mean anything about
+   the contract users are actually trading against.
+
+## Fourth pass: what the research notes turned into
+
+`research/hacken.md` and `research/hookguard.md` were written read-only against
+two other tools; this pass implemented the items they ranked highest, all
+re-implemented from described behaviour, nothing copied.
+
+- **HS-03 admin surface**, **HS-05 external call in the swap path** and
+  **HS-06 unbounded dynamic fee** now exist as detectors, with corpus fixtures
+  on both sides. They move `autonomousParameterUpdates`, `externalDependencies`
+  and `priceImpactingBehavior` from "no detector" to measurable, and each one's
+  score bracket is recorded in `schema/framework-rubric.json` as a
+  `findingDerivation` marked `interpretation: true` with a rationale per rule.
+  None of the three licenses a measured **0**: each detector's blind spot is
+  its dimension's own lowest bracket (see `docs/SCORING.md`).
+- **Three harness probes** run against the deployed hook at the end of `setUp`,
+  before the fuzz campaign: an EOA-guard call per implemented callback, a
+  foreign-`PoolKey` exclusivity call as the PoolManager, and a selector check
+  per callback. They are recorded in the run record as
+  `permissions.harnessRun.probes` and mapped in `cli/src/reconcile.ts`: an
+  unguarded callback HS-01 already found becomes one finding with two engine
+  attributions at high confidence, an unguarded callback HS-01 missed becomes a
+  harness-sourced `unprotected-hook-callback`, an accepted foreign key becomes
+  the INFO classification `unvalidated-pool-key`, and a wrong or reverting
+  selector becomes a HIGH `callback-selector-mismatch`.
+- **The harness is now a coverage source**, not only an invariant runner: it is
+  the engine responsible for the two probe-only classes and counts as having
+  looked when its status is `ok` (`enginesThatLooked` in
+  `cli/src/scoring/derive.ts`).
+
 ## Open items, in priority order
 
-1. Detectors for the five unmeasured dimensions: HS-05 external-call-in-swap-path
-   (helpers in `hook_analysis.py`), HS-04 upgradeability (StablePairHook is
-   UUPS; the profile does not see proxies yet), HS-03 admin surface (the
-   profile already computes `hasOwnerOnlyFunctions`), externalLiquidityExposure
-   and autonomousParameterUpdates.
+1. Detectors for the dimensions still unmeasured: HS-04 upgradeability
+   (StablePairHook is UUPS; the profile does not see proxies yet, and the
+   bytecode route in *Deployed mode design* is cheaper than BlockSec),
+   `externalLiquidityExposure` (no rule class at all), and the two blind spots
+   the new detectors left — a self-adjusting parameter with no admin surface
+   (autonomy, not admin surface) and an external dependency read outside the
+   swap path (a `hook-profile` metric counting them would close it).
 2. Harness reach: full-range seed fallback (`minUsableTick..maxUsableTick`)
    for full-range-only hooks; factory-parameter constructors (v2-on-v4);
    constructors needing a deployed dependency (Cork's `LiquidityToken`,
    WETHHook's WETH) via a per-hook deploy script hook.
-3. Deployed mode from Uniswap's `hooklist` registry (116 entries with declared
-   flags): fetch verified source via Sourcify, reconcile address bits against
-   `getHookPermissions()`, bind the manifest to the codehash.
+3. Deployed mode, per *Deployed mode design* above. Blocked on the per-chain
+   permission-bit-layout table; start there.
 4. BlockSec in CI (1.2 GB amd64 image; decide on caching), and `--log-json`
    exposed as an action input.
 5. `dedupe` merges cross-engine by selector; a hook that overloads a callback

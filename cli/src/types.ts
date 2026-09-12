@@ -67,6 +67,23 @@ export type RuleClass =
    */
   | 'unsupported-hook-abi'
   /**
+   * The hook accepted a PoolManager-routed callback for a pool it is not
+   * attached to. Produced by the harness's exclusivity probe, not by a
+   * detector: it initialises a second pool with the same hook and calls the
+   * hook as the PoolManager with that pool's key. A classification, not a
+   * defect — multi-pool hooks are legitimate, and the framework has no
+   * dimension for pool exclusivity — but a hook that keys per-pool state and
+   * accepts a foreign key is worth a reader's attention.
+   */
+  | 'unvalidated-pool-key'
+  /**
+   * A callback called as the PoolManager would call it returned the wrong
+   * selector, or reverted. Either way the PoolManager's own check fails and
+   * the pool operation is bricked; the harness observed it rather than
+   * inferring it from the source.
+   */
+  | 'callback-selector-mismatch'
+  /**
    * The engine's "I looked at this contract" signal: one per recognised hook,
    * anchored on the contract, carrying the resolved permission set, the
    * implemented callbacks and the metrics complexity is derived from. A
@@ -88,6 +105,7 @@ export const CLASSIFICATION_CLASSES: ReadonlySet<RuleClass> = new Set<RuleClass>
   'custom-accounting',
   'callback-intentionally-disabled',
   'unsupported-hook-abi',
+  'unvalidated-pool-key',
   'hook-profile',
 ]);
 

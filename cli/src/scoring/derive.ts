@@ -37,8 +37,28 @@
 
 import type { DeclaredInputs } from '../config.js';
 import type { EngineResult, Finding, RuleClass } from '../types.js';
-import { type Derivation, type DerivationRule, type Rubric, loadRubric } from './rubric.js';
+import { severityRank } from '../types.js';
+import {
+  type Derivation,
+  type DerivationRule,
+  type FindingDerivation,
+  type FindingDerivationRule,
+  type Rubric,
+  loadRubric,
+} from './rubric.js';
 import { type DimensionInput, type ScoringInput, type ValueSource, evaluateCondition } from './score.js';
+
+/**
+ * The differential harness's id in `CLASS_COVERAGE` and in `looked`.
+ *
+ * It is not an entry in `engineResults` — it produces invariants and probe
+ * observations rather than engine findings, and the CLI keeps it in its own
+ * summary — but for coverage purposes it is an analysis that either examined
+ * the hook or did not, exactly like an engine. Matches
+ * `manifest.HARNESS_ENGINE_ID`, which is what the manifest's engines table and
+ * every harness-sourced finding's attribution already say.
+ */
+const HARNESS_ENGINE = 'harness';
 
 /**
  * Which engine can produce each rule class.
@@ -61,6 +81,12 @@ const CLASS_COVERAGE: Record<RuleClass, string[]> = {
   'rounding-direction': ['hookrisk'],
   'callback-intentionally-disabled': ['hookrisk'],
   'unsupported-hook-abi': ['hookrisk'],
+  // The harness produces these two by executing the deployed hook, not by
+  // reading it: no detector can decide either from source. `harness` is not an
+  // engine in `engineResults` — see `enginesThatLooked`, which admits it from
+  // the harness summary the CLI passes.
+  'unvalidated-pool-key': [HARNESS_ENGINE],
+  'callback-selector-mismatch': [HARNESS_ENGINE],
   'hook-profile': ['hookrisk'],
 };
 
@@ -92,6 +118,15 @@ const CLASS_COVERAGE: Record<RuleClass, string[]> = {
 const IMPLEMENTED_CLASSES: ReadonlySet<RuleClass> = new Set<RuleClass>([
   'unprotected-hook-callback',
   'flag-implementation-divergence',
+  // HS-03, HS-05 and HS-06 landed with this pass: hookrisk can now produce
+  // these classes, so their absence is a fact about the hook rather than a
+  // fact about the tool — provided the engine analysed the target. Whether
+  // that absence measures a *zero* is a separate question, answered per
+  // dimension by `unmeasuredWhenSilent`: each of the three detectors has a
+  // blind spot that coincides with its dimension's lowest brackets.
+  'admin-surface',
+  'external-call-in-swap-path',
+  'unbounded-dynamic-fee',
   'custom-accounting',
   'callback-intentionally-disabled',
   'unsupported-hook-abi',
@@ -133,6 +168,14 @@ const DIMENSION_RULES: Record<string, DimensionRule> = {
     scoreFor: { 'custom-accounting': 3, 'unbounded-dynamic-fee': 2 },
     rationale:
       'A returns-delta permission lets the hook alter settled amounts, which is the framework’s definition of price-impacting behaviour.',
+    // HS-07 sees a returns-delta permission and HS-06 sees a dynamic fee with
+    // no ceiling. Neither sees a *bounded* dynamic fee, which is the rubric's
+    // own 2 bracket, and neither sees a fixed fee taken through an lpFeeOverride
+    // (bracket 1). Silence therefore cannot separate 0 from 1 or 2, and the 0
+    // bracket — "observes swaps; does not alter price, fee or delta" — is the
+    // strongest claim in the dimension.
+    unmeasuredWhenSilent:
+      'no returns-delta permission and no unbounded dynamic fee were found, but HS-06 only reports a fee it can show is unbounded: a hook that adjusts its LP fee within a ceiling (bracket 2) or charges a fixed declared fee (bracket 1) fires nothing. Declare priceImpactingBehavior in hookrisk.toml to score it.',
   },
   customMath: {
     raisedBy: ['custom-accounting', 'rounding-direction'],
@@ -142,9 +185,40 @@ const DIMENSION_RULES: Record<string, DimensionRule> = {
   },
   externalDependencies: {
     raisedBy: ['external-call-in-swap-path'],
+    // The per-finding split (2 for a call that can write, 1 for a static read)
+    // lives in the rubric's `findingDerivation`, with the rationale for each
+    // bracket; this stays as the fallback for a finding the rubric's rules do
+    // not match.
     scoreFor: { 'external-call-in-swap-path': 2 },
     rationale:
       'An external call inside the swap path reopens the execution environment mid-swap.',
+    // HS-05 is scoped to the swap path by construction, and the rubric's 1
+    // bracket is "one immutable, trusted dependency read *outside* the swap
+    // path". A hook that reads an oracle in afterInitialize and nothing in
+    // beforeSwap is a 1 that HS-05 is not looking for, so its silence cannot
+    // establish the 0 bracket ("touches only the PoolManager and the pair's
+    // tokens"). Closing this needs a metric counting external calls outside
+    // the swap path; the hook profile does not carry one yet.
+    unmeasuredWhenSilent:
+      'HS-05 found no external call inside the swap path, but it only looks there: a dependency read outside the swap path is the rubric’s 1 bracket and no detector reports it. Declare externalDependencies in hookrisk.toml to score it.',
+  },
+  autonomousParameterUpdates: {
+    raisedBy: ['admin-surface'],
+    // Both values come from the rubric's `findingDerivation`, which reads the
+    // finding's severity: HIGH is an unguarded mutator, MEDIUM an owner-only
+    // one. The flat entry is the floor for an admin-surface finding whose
+    // severity matches no rule.
+    scoreFor: { 'admin-surface': 1 },
+    rationale:
+      'HS-03 found a state-changing external function on the hook. The framework grades this dimension by the guardrails on a parameter change (bounds, rate limit, gating); an admin surface is where those guardrails would have to live.',
+    // HS-03 answers "who may change a parameter", not "does the hook change one
+    // by itself". A hook that recomputes its fee from its own state inside
+    // beforeSwap — the 3 bracket, self-adjusting with neither bounds nor rate
+    // limiting — has no admin surface at all and fires nothing. Reading that
+    // silence as 0 ("all parameters set by an explicit privileged call") would
+    // score the most autonomous hook in the corpus at the bottom of the scale.
+    unmeasuredWhenSilent:
+      'HS-03 found no privileged or unguarded mutator, but it measures the admin surface, not autonomy: a hook that recomputes a parameter from its own state inside a callback has no admin surface and fires nothing. Declare autonomousParameterUpdates in hookrisk.toml to score it.',
   },
   complexity: {
     raisedBy: ['flag-implementation-divergence', 'unprotected-hook-callback'],
@@ -245,13 +319,76 @@ export function deriveFromMetrics(
   return null;
 }
 
+/**
+ * Score one rule class from the findings that carry it, using the rubric's
+ * per-finding rules.
+ *
+ * Two of the new detectors report the same class in two shapes that deserve
+ * different scores — an unguarded mutator against an owner-only one, a call
+ * that can write against a static read — and the shape is on the finding
+ * (severity, `metrics`), not on the class. The rules are read in the order the
+ * rubric writes them, first match wins, and a rule with no `when` is that
+ * class's fallback; the loader refuses a rule written after one.
+ *
+ * The worst finding wins, and the rule that produced it is returned so the
+ * dimension's evidence can quote the rationale rather than assert a number.
+ * Null when the class has no rules here, or when no rule matched any finding —
+ * the caller then falls back to `DimensionRule.scoreFor`.
+ */
+export function scoreFromFindings(
+  derivation: FindingDerivation | undefined,
+  ruleClass: RuleClass,
+  findings: Finding[],
+): { score: number; rule: FindingDerivationRule; finding: Finding } | null {
+  const rules = (derivation?.rules ?? []).filter((r) => r.ruleClass === ruleClass);
+  if (rules.length === 0) return null;
+
+  let best: { score: number; rule: FindingDerivationRule; finding: Finding } | null = null;
+  for (const finding of findings) {
+    const { values, flags } = findingAttributes(finding);
+    const hit = rules.find((rule) => rule.when === undefined || evaluateCondition(rule.when, values, new Set(), flags));
+    if (!hit) continue;
+    if (!best || hit.score > best.score) best = { score: hit.score, rule: hit, finding };
+  }
+  return best;
+}
+
+/**
+ * The attributes a `findingDerivation` condition may read.
+ *
+ * Booleans go into both maps: as flags so `isStatic` reads naturally, and as
+ * 0/1 values so `isStatic == 0` expresses the negative. The condition grammar
+ * has no `!`, and adding one to a language that decides scores is a worse
+ * trade than writing the comparison.
+ */
+function findingAttributes(finding: Finding): {
+  values: Record<string, number>;
+  flags: Record<string, boolean>;
+} {
+  const values: Record<string, number> = { severityRank: severityRank(finding.severity) };
+  const flags: Record<string, boolean> = {};
+  // `profileMetrics` reads `metrics` wherever the adapter hung it; nothing
+  // about it is specific to a hook-profile finding.
+  for (const [name, value] of Object.entries(profileMetrics(finding) ?? {})) {
+    if (typeof value === 'number') values[name] = value;
+    else {
+      flags[name] = value;
+      values[name] = value ? 1 : 0;
+    }
+  }
+  return { values, flags };
+}
+
 const formatMetrics = (metrics: Record<string, number | boolean>): string =>
   Object.entries(metrics)
     .map(([name, value]) => `${name}=${value}`)
     .join(', ');
 
 /** Dimensions hookrisk never measures. Declared or unmeasured, never invented. */
-const NEVER_MEASURED = new Set(['teamMaturity', 'tvlPotential', 'externalLiquidityExposure', 'autonomousParameterUpdates']);
+// autonomousParameterUpdates left this set when HS-03 landed: it is now raised
+// by `admin-surface`, and unmeasured only when nothing fired (see
+// DIMENSION_RULES).
+const NEVER_MEASURED = new Set(['teamMaturity', 'tvlPotential', 'externalLiquidityExposure']);
 
 export interface DeriveOptions {
   findings: Finding[];
@@ -263,6 +400,16 @@ export interface DeriveOptions {
   rubric?: Rubric;
   /** Target contract, to pick its hook-profile when the file holds several. */
   contractName?: string;
+  /**
+   * How the differential harness ended, when it was part of the scan.
+   *
+   * The harness is not in `engineResults`, but it is the only producer of
+   * `unvalidated-pool-key` and `callback-selector-mismatch`, so without this
+   * every dimension those classes could raise would report "the harness did
+   * not run" even on a scan where it did. Structural rather than an import of
+   * `HarnessSummary`: the scorer needs the status, not the manifest's row.
+   */
+  harness?: { status: 'ok' | 'skipped' | 'failed'; reason?: string };
 }
 
 /**
@@ -276,6 +423,7 @@ export interface DeriveOptions {
 export function enginesThatLooked(
   engineResults: EngineResult[],
   findings: Finding[],
+  harness?: { status: 'ok' | 'skipped' | 'failed'; reason?: string },
 ): { looked: Set<string>; declined: Map<string, string> } {
   const looked = new Set<string>();
   const declined = new Map<string, string>();
@@ -304,8 +452,22 @@ export function enginesThatLooked(
     looked.add(result.engine);
   }
 
+  // The harness looked when it stood the twin pools up: its probes run against
+  // the deployed hook at the end of setUp, before the fuzz campaign, so an `ok`
+  // run means every probe either fired or reported itself not-applicable. A
+  // failed run reached no probe; a skipped one never started.
+  if (harness?.status === 'ok') looked.add(HARNESS_ENGINE);
+  else if (harness?.status === 'failed') {
+    declined.set(
+      HARNESS_ENGINE,
+      `ran and failed before its probes could observe the hook${harness.reason ? ` (${firstLine(harness.reason)})` : ''}`,
+    );
+  }
+
   return { looked, declined };
 }
+
+const firstLine = (text: string): string => text.split('\n')[0]?.trim().slice(0, 160) ?? '';
 
 /**
  * Build the scoring input from findings, engine outcomes and declarations.
@@ -317,10 +479,10 @@ export function enginesThatLooked(
  * is the only defence a document can offer.
  */
 export function deriveScoringInput(options: DeriveOptions): ScoringInput {
-  const { findings, engineResults, declared, dimensionIds, contractName } = options;
+  const { findings, engineResults, declared, dimensionIds, contractName, harness } = options;
   const rubric = options.rubric ?? loadRubric();
 
-  const { looked, declined } = enginesThatLooked(engineResults, findings);
+  const { looked, declined } = enginesThatLooked(engineResults, findings, harness);
 
   const byClass = new Map<RuleClass, Finding[]>();
   for (const finding of findings) {
@@ -383,13 +545,25 @@ export function deriveScoringInput(options: DeriveOptions): ScoringInput {
       }
     }
 
-    // Find the strongest evidence present.
+    // Find the strongest evidence present. A class whose score depends on the
+    // shape of the finding (HS-03's unguarded vs owner-only mutator, HS-05's
+    // static vs state-changing call) is resolved from the rubric; the flat
+    // table is the fallback.
+    const findingRules = rubric.dimensions.find((d) => d.id === id)?.findingDerivation;
     for (const ruleClass of rule.raisedBy) {
       const hits = byClass.get(ruleClass);
       if (!hits?.length) continue;
-      const value = rule.scoreFor[ruleClass] ?? 1;
+      const shaped = scoreFromFindings(findingRules, ruleClass, hits);
+      const value = shaped?.score ?? rule.scoreFor[ruleClass] ?? 1;
       if (measured === null || value > measured) measured = value;
       evidence.push(`${hits.length} ${ruleClass} finding(s)`);
+      if (shaped) {
+        evidence.push(
+          `Scored ${shaped.score} by rule \`${shaped.rule.when ?? 'always'}\` on ` +
+            `${shaped.finding.discriminator ?? shaped.finding.title} (${shaped.finding.severity}): ${shaped.rule.rationale}` +
+            (findingRules?.interpretation ? ' (hookrisk’s interpretation; the framework publishes no brackets)' : ''),
+        );
+      }
     }
 
     if (measured !== null) {

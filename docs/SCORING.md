@@ -146,6 +146,61 @@ The manifest carries the metrics on the profile finding (`findings[].metrics`,
 table under *What was assessed*; the rule that fired is in the score table's
 evidence.
 
+#### Scores that depend on the shape of a finding
+
+HS-03, HS-05 and HS-06 report one class each, but the class alone does not fix
+the score: an unguarded mutator and an owner-only one are both `admin-surface`,
+and a `staticcall` to an oracle and a state-changing call to a lending market
+are both `external-call-in-swap-path`. The distinguishing evidence is on the
+finding — its severity, or a metric such as `isStatic` — so the class-to-score
+mapping lives in the rubric too, as a per-dimension `findingDerivation` block
+marked `interpretation: true`, one rationale per rule. Rules are read in the
+order written, first match wins, and a rule with no condition is that class's
+fallback; the loader refuses a rule written after one (it could never fire) and
+a rule naming an attribute the finding cannot carry.
+
+| Dimension | Finding | Score | Why that bracket |
+|---|---|---|---|
+| Autonomous parameter updates | `admin-surface` **HIGH** (unguarded mutator) | 2 | Anyone can move the parameter, so no access control enforces bounds or a rate limit. Not 3: the 3 bracket is a hook that adjusts *itself*. Not 0: the 0 bracket is "an explicit **privileged** call" |
+| Autonomous parameter updates | `admin-surface` **MEDIUM** (owner-only) | 1 | The framework's 0 bracket describes this shape exactly, but 0 would rank a hook whose owner can move the fee level with a hook that has no parameters at all, and source analysis cannot see the owner's timelock, ceiling or multisig. A floor, not a verdict — declare 0 if you have the guardrails |
+| External dependencies | `external-call-in-swap-path`, `metrics.isStatic` true | 1 | A `staticcall` cannot write to the dependency or reenter the PoolManager. A floor: the framework's 2 bracket does not qualify the call kind |
+| External dependencies | any other `external-call-in-swap-path` | 2 | The 2 bracket verbatim, "a dependency read inside the swap path". Also the fallback, so a finding whose kind the detector did not classify scores 2 rather than 1 |
+| Price impacting behavior | `unbounded-dynamic-fee` | 2 | HS-06's evidence is *negative* — it did not find a bound. The 3 bracket ("adjusts fees without a ceiling") asserts no ceiling exists anywhere, which a source detector cannot establish; the missing ceiling is reported as the finding, and a reviewer who confirms it should declare 3 |
+
+#### None of the three can measure a zero
+
+Each of the three detectors has a blind spot that coincides with the bottom of
+its own dimension, so silence leaves the dimension **unmeasured** and says why:
+
+- **HS-03 measures the admin surface, not autonomy.** A hook that recomputes
+  its fee from its own state inside `beforeSwap` — the 3 bracket, self-adjusting
+  with neither bounds nor rate limiting — has no admin surface at all and fires
+  nothing.
+- **HS-05 only looks inside the swap path.** "One immutable, trusted dependency
+  read *outside* the swap path" is the framework's own 1 bracket, and no
+  detector reports it; closing this needs a profile metric counting external
+  calls outside the swap path.
+- **HS-06 only reports a fee it can show is unbounded.** A hook that adjusts
+  its LP fee within a ceiling (bracket 2), or charges a fixed declared fee
+  through an `lpFeeOverride` (bracket 1), fires nothing.
+
+The three classes are nonetheless in `IMPLEMENTED_CLASSES`: hookrisk can now
+*produce* them, so a dimension is no longer reported as "no detector for this
+class yet". What changed is the positive direction — these dimensions can now
+be measured from evidence — not the licence to read silence as zero.
+
+#### The harness is a coverage source too
+
+Two rule classes are produced by executing the hook rather than reading it:
+`unvalidated-pool-key` (INFO classification) and `callback-selector-mismatch`
+(HIGH defect), both from the probes the differential harness runs against the
+deployed hook before the fuzz campaign. Neither informs a dimension — the
+framework has no bracket for pool exclusivity, and a bricked callback is a
+defect to fix, not a risk to price — but the harness is registered in
+`CLASS_COVERAGE` as the engine responsible for them, and counts as having
+*looked* when its status is `ok`. A harness that failed disclaims, with its
+revert quoted, exactly like a static engine that could not compile the project.
+
 ### 3. Measured and declared are different claims
 
 `teamMaturity` is a self-assessment by definition. `upgradeability` is observable
@@ -166,13 +221,13 @@ rather than guess.
 |---|---|---|
 | Complexity | 0–5 | Derived from the `hook-profile` metrics by the rubric's rule table; HS-01/HS-02 add a floor of 1; no profile → **unmeasured**, silence is not 0 |
 | Custom math | 0–5 | Measured — from custom-accounting and rounding findings |
-| External dependencies | 0–3 | Needs HS-05 (not implemented) → unmeasured |
+| External dependencies | 0–3 | Measured from HS-05 (2, or 1 for a static read); **unmeasured** when HS-05 is silent — it only looks inside the swap path |
 | External liquidity exposure | 0–3 | Never measured → declared or unmeasured |
 | TVL potential | 0–5 | **Declared** — asks about potential, not current |
 | Team maturity | 0–3 | **Declared** — self-assessed by definition |
 | Upgradeability | 0–3 | Measured when BlockSec runs, else unmeasured |
-| Autonomous parameter updates | 0–3 | Never measured → declared or unmeasured |
-| Price impacting behavior | 0–3 | Measured — returns-delta permissions, dynamic fees |
+| Autonomous parameter updates | 0–3 | Measured from HS-03 (2 unguarded, 1 owner-only); **unmeasured** when HS-03 is silent — it sees the admin surface, not autonomy |
+| Price impacting behavior | 0–3 | Measured — returns-delta permissions (3), HS-06 unbounded dynamic fee (2); **unmeasured** on silence, which cannot separate "no fee logic" from a bounded one |
 
 ## Where we interpreted, and why you should check
 

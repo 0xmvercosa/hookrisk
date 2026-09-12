@@ -53,7 +53,8 @@ const RULE_HELP: Record<string, { name: string; description: string }> = {
   },
   'admin-surface': {
     name: 'Privileged administrative surface',
-    description: 'Functions that can change fees, pause the hook, or move tokens.',
+    description:
+      'A state-changing external function on the hook: unguarded, so anyone can move the hook’s parameters, or owner-only, so one key can. Fees, pauses, withdrawal restrictions and pool registrations all live here.',
   },
   'upgradeable-hook': {
     name: 'Upgradeable hook',
@@ -67,11 +68,12 @@ const RULE_HELP: Record<string, { name: string; description: string }> = {
   'external-call-in-swap-path': {
     name: 'External call in the swap path',
     description:
-      'A call inside before/afterSwap to something other than the PoolManager or the pair’s tokens reopens the execution environment mid-swap.',
+      'A call inside before/afterSwap to something other than the PoolManager or the pair’s tokens reopens the execution environment mid-swap: the callee decides whether the swap completes, and an unhandled revert there bricks the pool.',
   },
   'unbounded-dynamic-fee': {
     name: 'Unbounded dynamic fee',
-    description: 'A dynamic fee with no ceiling, no rate limit, or the wrong controller.',
+    description:
+      'The hook sets the pool’s LP fee dynamically and no ceiling on the value could be found, so the fee a swapper pays is bounded only by v4’s own maximum.',
   },
   'custom-accounting': {
     name: 'Custom accounting in use',
@@ -86,6 +88,16 @@ const RULE_HELP: Record<string, { name: string; description: string }> = {
     name: 'Callback intentionally disabled',
     description:
       'A hook callback is overridden with a deliberate revert, so the matching PoolManager operation is disabled by design. A classification, not a defect: it explains why the pool cannot, for example, accept liquidity through the PoolManager.',
+  },
+  'unvalidated-pool-key': {
+    name: 'Hook accepts a foreign pool key',
+    description:
+      'Called by the PoolManager with the key of a second pool the hook is not attached to, the hook accepted it. Observed by the differential harness, not inferred from source. A classification, not a defect: multi-pool hooks are legitimate — but a hook that keys state per pool and accepts any key can be driven through a pool its author never registered.',
+  },
+  'callback-selector-mismatch': {
+    name: 'Callback returns the wrong selector',
+    description:
+      'Called exactly as the PoolManager would call it, the callback returned a selector the PoolManager does not accept, or reverted. Either way the pool operation it guards cannot complete. Observed by the differential harness against the deployed hook.',
   },
   'unsupported-hook-abi': {
     name: 'Unsupported hook ABI',

@@ -472,6 +472,11 @@ const RULE_ID: Record<string, string> = {
   'callback-intentionally-disabled': 'C-01',
   'unsupported-hook-abi': 'C-02',
   'hook-profile': 'C-00',
+  // P for probe: produced by the harness executing the hook, not by a detector
+  // reading it. Numbered in their own series so a reader can tell at a glance
+  // which layer saw the thing.
+  'unvalidated-pool-key': 'P-01',
+  'callback-selector-mismatch': 'P-02',
 };
 
 const SEVERITY_LABEL: Record<Severity, string> = {
@@ -518,9 +523,47 @@ function shortTitle(f: Record<string, unknown>): string {
       return 'The hook can self-destruct';
     case 'unprotected-unlock-callback':
       return what ? `${what} is callable by anyone` : 'unlockCallback is callable by anyone';
+    case 'admin-surface':
+      return what
+        ? `${what} changes hook state and is callable outside a swap`
+        : 'The hook has a privileged administrative surface';
+    case 'external-call-in-swap-path':
+      return what
+        ? `${what} calls out of the swap path mid-swap`
+        : 'The swap path calls a contract that is neither the PoolManager nor a pool token';
+    case 'unbounded-dynamic-fee':
+      return what
+        ? `${what} sets the pool fee with no ceiling on the value`
+        : 'The hook sets the pool fee dynamically with no ceiling';
+    case 'unvalidated-pool-key':
+      return 'The hook accepted a callback for a pool it is not attached to';
+    case 'callback-selector-mismatch':
+      return what
+        ? `${what} did not return its own selector when called as the PoolManager`
+        : 'A callback did not return its own selector when called as the PoolManager';
     default:
       return String(f.title);
   }
+}
+
+/**
+ * How a finding's engine attributions read in prose.
+ *
+ * "Reported by `harness/eoa-guard-probe`" understates what happened: the
+ * harness did not read the hook and form an opinion, it called the hook and
+ * watched. Findings the probes produced say so, and a finding both layers
+ * carry says both, because that combination is the strongest evidence
+ * hookrisk emits.
+ */
+function attributionSentence(engines: Array<Record<string, unknown>>): string {
+  const ref = (e: Record<string, unknown>): string => `\`${e.engine}/${e.nativeRule}\``;
+  const probes = engines.filter((e) => e.engine === HARNESS_ENGINE_ID);
+  const readers = engines.filter((e) => e.engine !== HARNESS_ENGINE_ID);
+  if (probes.length === 0) return `Reported by ${engines.map(ref).join(', ')}.`;
+  const observed = `Observed by the differential harness running the hook (${probes.map(ref).join(', ')})`;
+  return readers.length === 0
+    ? `${observed}.`
+    : `${observed}, and reported from source by ${readers.map(ref).join(', ')}.`;
 }
 
 const cell = (text: unknown): string => String(text ?? '').replace(/\|/g, '\\|').replace(/\n+/g, ' ');
@@ -657,7 +700,7 @@ export function renderMarkdown(manifest: Manifest): string {
     out.push('');
     defects.forEach((f, i) => {
       const location = f.location as Record<string, unknown> | null;
-      const attributions = (f.engines as Array<Record<string, unknown>>).map((e) => `\`${e.engine}/${e.nativeRule}\``);
+      const attributions = f.engines as Array<Record<string, unknown>>;
       out.push(`### F${i + 1} · ${SEVERITY_LABEL[f.severity as Severity]} · ${shortTitle(f)}`, '');
       out.push(
         `${RULE_ID[String(f.ruleClass)] ? `${RULE_ID[String(f.ruleClass)]} ` : ''}\`${f.ruleClass}\`` +
@@ -667,7 +710,7 @@ export function renderMarkdown(manifest: Manifest): string {
         '',
       );
       out.push(String(f.description), '');
-      out.push(`Reported by ${attributions.join(', ')}.`, '');
+      out.push(attributionSentence(f.engines as Array<Record<string, unknown>>), '');
     });
   }
 
