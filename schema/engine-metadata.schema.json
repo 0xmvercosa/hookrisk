@@ -32,9 +32,11 @@
         "rounding-direction",
         "callback-intentionally-disabled",
         "unsupported-hook-abi",
-        "hook-profile"
+        "hook-profile",
+        "unvalidated-pool-key",
+        "callback-selector-mismatch"
       ],
-      "description": "Canonical taxonomy shared with `RuleClass` in cli/src/types.ts and with the manifest schema. `hook-profile` is the per-contract classification carrying `metrics`, `permissions` and `callbacks`: the engine's \"I looked at this contract\" signal."
+      "description": "Canonical taxonomy shared with `RuleClass` in cli/src/types.ts and with the manifest schema. `hook-profile` is the per-contract classification carrying `metrics`, `permissions` and `callbacks`: the engine's \"I looked at this contract\" signal. `unvalidated-pool-key` and `callback-selector-mismatch` are produced by the harness probes, not by a detector; they are listed so one enum names every class an engine may emit."
     },
     "informsDimensions": {
       "type": "array",
@@ -57,18 +59,38 @@
     },
     "metrics": {
       "type": "object",
-      "description": "Per-contract measurements. Only the `hook-profile` classification carries this today; the scoring layer derives the complexity dimension from it.",
+      "description": "Measurements attached to a finding. Two shapes share the object: the `hook-profile` classification carries the per-contract profile (every profile metric, all required together — `dependentRequired` keys them off `callbacksImplemented`), and an `external-call-in-swap-path` finding carries the destination classification (`destination`, `isStatic`, `unhandled`, required together). The scoring layer derives complexity from the former and externalDependencies from the latter.",
       "additionalProperties": false,
-      "required": [
-        "callbacksImplemented",
-        "callbacksDeclared",
-        "stateWritesInCallbacks",
-        "externalCallsInSwapPath",
-        "internalFunctionsReachableFromCallbacks",
-        "usesReturnsDelta",
-        "hasOwnerOnlyFunctions"
-      ],
+      "dependentRequired": {
+        "callbacksImplemented": [
+          "callbacksDeclared",
+          "stateWritesInCallbacks",
+          "externalCallsInSwapPath",
+          "internalFunctionsReachableFromCallbacks",
+          "usesReturnsDelta",
+          "hasOwnerOnlyFunctions"
+        ],
+        "destination": ["isStatic", "unhandled"]
+      },
       "properties": {
+        "destination": {
+          "type": "string",
+          "minLength": 1,
+          "description": "HS-05: the third-party destination of a swap-path call, named by the variable it was read from (an oracle, another protocol, an arbitrary address). Never the PoolManager, a library or the pool's own currencies — those are excluded before a finding exists."
+        },
+        "isStatic": {
+          "type": "boolean",
+          "description": "HS-05: every call to this destination is a static read (a `view`/`pure` callee or `staticcall`)."
+        },
+        "unhandled": {
+          "type": "boolean",
+          "description": "HS-05: at least one call to this destination is not inside a `try`, so a revert there reverts the swap."
+        },
+        "externalCallsInSwapPathThirdParty": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Of `externalCallsInSwapPath`, the calls that leave the pool's trust boundary: not the PoolManager, not a library, not the pool's own currencies. The externalDependencies input. Always emitted by the profile (detectors/tests asserts it); not in `dependentRequired` yet so a consumer built against the seven original metrics keeps validating — tighten once every fixture carries it."
+        },
         "callbacksImplemented": {
           "type": "integer",
           "minimum": 0,

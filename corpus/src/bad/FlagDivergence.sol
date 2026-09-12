@@ -23,10 +23,19 @@ pragma solidity ^0.8.26;
 //   3. `beforeSwapReturnDelta: true` while `beforeSwap` would need to be too.
 //      Covered by the second contract below, since it must not be masked by (1).
 //
+//   4. `afterSwapReturnDelta: true` while `_afterSwap` returns `int128(0)` on
+//      every path. The third HS-02 case (ZeroDeltaHook): the flag costs an
+//      address bit, a custom-accounting classification and a math review for
+//      a delta the hook never returns. Medium, discriminator the field name.
+//      ComputedDeltaHook is the in-file control: same flag, delta built by
+//      `toBeforeSwapDelta(...)`, must stay silent.
+//
 // Detector expectation:
 //   HS-02 reports (1) and (2) on DivergentHook.
 //   HS-02 reports the orphan returns-delta permission on OrphanDeltaHook.
-//   HS-07 classifies OrphanDeltaHook as using custom accounting.
+//   HS-02 reports (4) on ZeroDeltaHook at Medium; nothing on ComputedDeltaHook.
+//   HS-07 classifies OrphanDeltaHook, ZeroDeltaHook and ComputedDeltaHook as
+//         using custom accounting.
 // ---------------------------------------------------------------------------
 
 import {BaseHook} from "@openzeppelin/uniswap-hooks/src/base/BaseHook.sol";
@@ -36,6 +45,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 contract DivergentHook is BaseHook {
@@ -98,5 +108,74 @@ contract OrphanDeltaHook is BaseHook {
             afterAddLiquidityReturnDelta: false,
             afterRemoveLiquidityReturnDelta: false
         });
+    }
+}
+
+contract ZeroDeltaHook is BaseHook {
+    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
+
+    // (4) `afterSwapReturnDelta` declared, delta never non-zero.
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+        return Hooks.Permissions({
+            beforeInitialize: false,
+            afterInitialize: false,
+            beforeAddLiquidity: false,
+            afterAddLiquidity: false,
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: false,
+            beforeSwap: false,
+            afterSwap: true,
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: false,
+            afterSwapReturnDelta: true,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
+        });
+    }
+
+    function _afterSwap(address, PoolKey calldata, SwapParams calldata, BalanceDelta, bytes calldata)
+        internal
+        pure
+        override
+        returns (bytes4, int128)
+    {
+        int128 delta = int128(0);
+        return (IHooks.afterSwap.selector, delta);
+    }
+}
+
+// --- CONTROL ---------------------------------------------------------------
+// The delta is computed, so the flag is used. HS-02 (4) must stay silent.
+contract ComputedDeltaHook is BaseHook {
+    constructor(IPoolManager _poolManager) BaseHook(_poolManager) {}
+
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+        return Hooks.Permissions({
+            beforeInitialize: false,
+            afterInitialize: false,
+            beforeAddLiquidity: false,
+            afterAddLiquidity: false,
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: false,
+            beforeSwap: true,
+            afterSwap: false,
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: true,
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
+        });
+    }
+
+    function _beforeSwap(address, PoolKey calldata, SwapParams calldata params, bytes calldata)
+        internal
+        pure
+        override
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
+        int128 specified = int128(params.amountSpecified / 100);
+        return (IHooks.beforeSwap.selector, toBeforeSwapDelta(specified, 0), 0);
     }
 }

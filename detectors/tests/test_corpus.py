@@ -35,6 +35,9 @@ DETECTORS = ",".join(
     [
         "hookrisk-unprotected-callback",
         "hookrisk-flag-divergence",
+        "hookrisk-admin-surface",
+        "hookrisk-external-call-in-swap-path",
+        "hookrisk-unbounded-dynamic-fee",
         "hookrisk-custom-accounting",
         "hookrisk-disabled-callback",
         "hookrisk-unsupported-abi",
@@ -47,18 +50,22 @@ DETECTORS = ",".join(
 KNOWN_RULE_CLASSES = {
     "unprotected-hook-callback",
     "flag-implementation-divergence",
+    "admin-surface",
+    "external-call-in-swap-path",
+    "unbounded-dynamic-fee",
     "custom-accounting",
     "callback-intentionally-disabled",
     "unsupported-hook-abi",
     "hook-profile",
 }
 
-#: The seven metrics every hook-profile must carry, with their JSON types.
+#: The eight metrics every hook-profile must carry, with their JSON types.
 PROFILE_METRICS = {
     "callbacksImplemented": int,
     "callbacksDeclared": int,
     "stateWritesInCallbacks": int,
     "externalCallsInSwapPath": int,
+    "externalCallsInSwapPathThirdParty": int,
     "internalFunctionsReachableFromCallbacks": int,
     "usesReturnsDelta": bool,
     "hasOwnerOnlyFunctions": bool,
@@ -73,14 +80,15 @@ PROFILE_METRICS = {
 # library and must not grow a dependency for one file, so the subset of
 # draft 2020-12 the engine-metadata schema actually uses is implemented here:
 # type, required, properties, additionalProperties, propertyNames, items,
-# enum, const, minimum, minLength, uniqueItems. Anything else in the schema is
-# an error, not silently ignored — a keyword this checker does not know is a
-# keyword the Python gate would stop enforcing without anyone noticing.
+# enum, const, minimum, minLength, uniqueItems, dependentRequired. Anything
+# else in the schema is an error, not silently ignored — a keyword this
+# checker does not know is a keyword the Python gate would stop enforcing
+# without anyone noticing.
 
 _KNOWN_KEYWORDS = {
     "$schema", "$id", "title", "description", "type", "required", "properties",
     "additionalProperties", "propertyNames", "items", "enum", "const", "minimum",
-    "minLength", "uniqueItems",
+    "minLength", "uniqueItems", "dependentRequired",
 }
 
 _JSON_TYPES = {
@@ -119,6 +127,11 @@ def schema_errors(schema: dict, value, path: str = "$") -> list[str]:
         for key in schema.get("required", []):
             if key not in value:
                 errors.append(f"{path}: missing required {key!r}")
+        for trigger, companions in schema.get("dependentRequired", {}).items():
+            if trigger in value:
+                for key in companions:
+                    if key not in value:
+                        errors.append(f"{path}: {trigger!r} present but {key!r} missing")
         properties = schema.get("properties", {})
         extra = schema.get("additionalProperties", True)
         names = schema.get("propertyNames")
@@ -265,7 +278,14 @@ class MetadataContract(unittest.TestCase):
             "unknown callback": {**good, "callbacks": ["beforeSwapReturnDelta"]},
             "duplicate callback": {**good, "callbacks": ["beforeSwap", "beforeSwap"]},
             "empty discriminator": {**good, "discriminator": ""},
+            # HS-05's shape must come whole: a destination without its
+            # static/unhandled verdicts would leave the scorer guessing.
+            "destination alone": {**good, "metrics": {"destination": "oracle"}},
+            "empty destination": {**good, "metrics": {"destination": "", "isStatic": True, "unhandled": True}},
         }
+        self.assertEqual(
+            [], schema_errors(metadata_schema(), {**good, "metrics": {"destination": "oracle", "isStatic": True, "unhandled": False}})
+        )
         for label, block in cases.items():
             self.assertNotEqual([], schema_errors(metadata_schema(), block), label)
 
@@ -319,17 +339,32 @@ class GoodCorpus(unittest.TestCase):
         self.assertTrue(finding["hookrisk"]["isClassification"])
         self.assertIn("LiquidityNotAllowed()", finding["description"])
         self.assertIn("liquidity addition is disabled by design", finding["description"])
-        self.assertIn("harness will observe reverts", finding["description"])
+        # The wording changed in the third pass (81de757) and this assertion
+        # did not follow; it now checks the claim, not the phrasing.
+        self.assertIn("harness records such reverts", finding["description"])
 
     def test_no_unsupported_abi_in_good(self) -> None:
         self.assertEqual([], by_check(scan("src/good"), "hookrisk-unsupported-abi"))
 
-    def test_admin_fixtures_stay_clean(self) -> None:
-        # An admin surface is a profile metric, not a finding: the fixture
-        # exists to exercise `hasOwnerOnlyFunctions` and must trip nothing.
-        for check in ("hookrisk-unprotected-callback", "hookrisk-flag-divergence", "hookrisk-disabled-callback"):
-            hits = [anchor(f) for f in by_check(scan("src/good"), check)]
-            self.assertFalse([h for h in hits if "AdminHook" in h], f"{check} fired on {hits}")
+    def test_controls_for_the_new_detectors_stay_silent(self) -> None:
+        # BoundedFeeHook.sol: a clamped fee, a validated fee, an owner whose
+        # only power is cosmetic, and swap-path calls that stay inside the
+        # pool. Each is the shape next to which the bad corpus plants the bug.
+        findings = scan("src/good")
+        for check in (
+            "hookrisk-admin-surface",
+            "hookrisk-external-call-in-swap-path",
+            "hookrisk-unbounded-dynamic-fee",
+        ):
+            self.assertEqual([], [anchor(f) for f in by_check(findings, check)], check)
+        # The zero-delta case of HS-02 must not accuse a delta it did not read:
+        # AntiSandwich's `_afterSwap` is partially lifted at some pins.
+        zero_delta = [
+            anchor(f)
+            for f in by_check(findings, "hookrisk-flag-divergence")
+            if "zero delta" in f["description"]
+        ]
+        self.assertEqual([], zero_delta)
 
 
 class HookProfile(unittest.TestCase):
@@ -341,10 +376,28 @@ class HookProfile(unittest.TestCase):
         "ProductionAntiSandwichHook",
         "ProductionLimitOrderHook",
         "ProductionLiquidityPenaltyHook",
+        "ClampedFeeHook",
+        "ValidatedFeeHook",
+        "MetadataOwnerHook",
+        "PoolOnlyCallsHook",
+    }
+    BAD = {
+        "UnvalidatedCallback",
+        "DivergentHook",
+        "OrphanDeltaHook",
+        "ZeroDeltaHook",
+        "ComputedDeltaHook",
+        "OpenAdminHook",
         "OwnableAdminHook",
         "HandRolledAdminHook",
+        "RoleAdminHook",
+        "UnboundedOverrideFeeHook",
+        "OwnerSetFeeHook",
+        "BoundedOwnerFeeHook",
+        "HookDataFeeHook",
+        "OracleFeeHook",
+        "OracleDependentHook",
     }
-    BAD = {"UnvalidatedCallback", "DivergentHook", "OrphanDeltaHook"}
 
     def test_exactly_one_profile_per_hook_in_good_and_bad(self) -> None:
         self.assertEqual(self.GOOD, set(profiles(scan("src/good"))))
@@ -369,12 +422,26 @@ class HookProfile(unittest.TestCase):
         self.assertEqual(2, metrics["callbacksDeclared"])
         self.assertGreaterEqual(metrics["stateWritesInCallbacks"], 1)
         self.assertEqual(0, metrics["externalCallsInSwapPath"])
+        self.assertEqual(0, metrics["externalCallsInSwapPathThirdParty"])
         self.assertFalse(metrics["usesReturnsDelta"])
         self.assertFalse(metrics["hasOwnerOnlyFunctions"])
         self.assertEqual(["afterSwap", "beforeSwap"], meta["callbacks"])
         # Every field of Hooks.Permissions, resolved, not just the true ones.
         self.assertEqual(14, len(meta["permissions"]))
         self.assertEqual({"beforeSwap", "afterSwap"}, {k for k, v in meta["permissions"].items() if v})
+
+    def test_third_party_swap_path_calls_are_counted_apart_from_the_pool(self) -> None:
+        # The raw count includes the PoolManager and the pool's own tokens;
+        # the third-party count is what externalDependencies may read.
+        good = profiles(scan("src/good"))["PoolOnlyCallsHook"]["metrics"]
+        self.assertEqual(2, good["externalCallsInSwapPath"])
+        self.assertEqual(0, good["externalCallsInSwapPathThirdParty"])
+        limit_order = profiles(scan("src/good"))["ProductionLimitOrderHook"]["metrics"]
+        self.assertGreater(limit_order["externalCallsInSwapPath"], 0)
+        self.assertEqual(0, limit_order["externalCallsInSwapPathThirdParty"])
+        bad = profiles(scan("src/bad"))["OracleDependentHook"]["metrics"]
+        self.assertEqual(3, bad["externalCallsInSwapPath"])
+        self.assertEqual(2, bad["externalCallsInSwapPathThirdParty"])
 
     def test_inherited_permissions_are_resolved(self) -> None:
         # The OpenZeppelin subclasses declare nothing themselves; the source
@@ -394,12 +461,21 @@ class HookProfile(unittest.TestCase):
         self.assertEqual(0, meta["metrics"]["callbacksImplemented"])
         self.assertEqual(1, meta["metrics"]["callbacksDeclared"])
 
-    def test_owner_only_functions_in_both_shapes(self) -> None:
-        found = profiles(scan("src/good"))
-        self.assertTrue(found["OwnableAdminHook"]["metrics"]["hasOwnerOnlyFunctions"], "Ownable onlyOwner")
-        self.assertTrue(found["HandRolledAdminHook"]["metrics"]["hasOwnerOnlyFunctions"], "require(msg.sender == admin)")
+    def test_owner_only_functions_in_all_three_shapes(self) -> None:
+        bad = profiles(scan("src/bad"))
+        self.assertTrue(bad["OwnableAdminHook"]["metrics"]["hasOwnerOnlyFunctions"], "Ownable onlyOwner")
+        self.assertTrue(bad["HandRolledAdminHook"]["metrics"]["hasOwnerOnlyFunctions"], "require(msg.sender == admin)")
+        # AccessControl has no `==` anywhere; the guard is a role lookup keyed
+        # by the sender. StablePairHook was reported as having no admin
+        # surface because of this.
+        self.assertTrue(bad["RoleAdminHook"]["metrics"]["hasOwnerOnlyFunctions"], "AccessControl onlyRole")
+        self.assertFalse(bad["OpenAdminHook"]["metrics"]["hasOwnerOnlyFunctions"], "no guard at all")
+        good = profiles(scan("src/good"))
+        self.assertTrue(good["MetadataOwnerHook"]["metrics"]["hasOwnerOnlyFunctions"], "owner-only, not economic")
+        # A user-facing function that reads `liquidity[msg.sender]` and
+        # compares it to zero is not an admin check.
         for name in ("CleanHook", "ProductionLimitOrderHook", "IntentionalRevertHook"):
-            self.assertFalse(found[name]["metrics"]["hasOwnerOnlyFunctions"], name)
+            self.assertFalse(good[name]["metrics"]["hasOwnerOnlyFunctions"], name)
 
     def test_hand_rolled_hook_without_permissions_has_none(self) -> None:
         meta = profiles(scan("src/bad"))["UnvalidatedCallback"]
@@ -466,6 +542,113 @@ class BadCorpus(unittest.TestCase):
 
     def test_no_intentional_revert_classification_in_bad(self) -> None:
         self.assertEqual([], by_check(scan("src/bad"), "hookrisk-disabled-callback"))
+
+    # --- HS-02, third case ---------------------------------------------------
+
+    def test_hs02_declared_delta_never_returned_is_medium(self) -> None:
+        zero = [
+            f
+            for f in by_check(scan("src/bad"), "hookrisk-flag-divergence")
+            if f["hookrisk"].get("discriminator") == "afterSwapReturnDelta"
+        ]
+        self.assertEqual(["ZeroDeltaHook._afterSwap"], [anchor(f) for f in zero])
+        self.assertEqual("Medium", zero[0]["impact"])
+        self.assertIn("zero delta on every path", zero[0]["description"])
+        # The control: same flag, delta built by toBeforeSwapDelta(...).
+        computed = [
+            anchor(f)
+            for f in by_check(scan("src/bad"), "hookrisk-flag-divergence")
+            if anchor(f).startswith("ComputedDeltaHook")
+        ]
+        self.assertEqual([], computed)
+
+    # --- HS-03 ---------------------------------------------------------------
+
+    def test_hs03_unguarded_mutator_is_high_and_owner_only_is_medium(self) -> None:
+        hits = {
+            (anchor(f), f["hookrisk"]["discriminator"]): f["impact"]
+            for f in by_check(scan("src/bad"), "hookrisk-admin-surface")
+        }
+        self.assertEqual(
+            {
+                ("OpenAdminHook.setFee", "setFee"): "High",
+                # OpenZeppelin's mock: the setter lives under lib/, so the
+                # finding anchors on the project contract and survives
+                # --exclude-dependencies.
+                ("UnboundedOverrideFeeHook", "setFee"): "High",
+                ("OwnableAdminHook.setFee", "setFee"): "Medium",
+                ("HandRolledAdminHook.setFee", "setFee"): "Medium",
+                ("RoleAdminHook.setFee", "setFee"): "Medium",
+                ("OwnerSetFeeHook.setFee", "setFee"): "Medium",
+                ("BoundedOwnerFeeHook.setFee", "setFee"): "Medium",
+            },
+            hits,
+        )
+        # Owner-only but not economic, and OpenZeppelin's own owner/role
+        # bookkeeping: nothing a callback reads, so nothing to report.
+        self.assertNotIn("setMetadata", {k[1] for k in hits})
+        self.assertNotIn("transferOwnership", {k[1] for k in hits})
+        self.assertNotIn("grantRole", {k[1] for k in hits})
+
+    def test_hs03_names_the_variables_the_callbacks_read(self) -> None:
+        for finding in by_check(scan("src/bad"), "hookrisk-admin-surface"):
+            self.assertEqual("admin-surface", finding["hookrisk"]["ruleClass"])
+            self.assertFalse(finding["hookrisk"]["isClassification"])
+            self.assertRegex(finding["description"], r"writes `(feeBips|fee|_fee)` which the callbacks read")
+            if finding["impact"] == "High":
+                self.assertIn("callable by anyone", finding["description"])
+            else:
+                self.assertIn("restricted to a privileged caller", finding["description"])
+                self.assertIn("autonomous-parameter-updates", finding["description"])
+
+    # --- HS-05 ---------------------------------------------------------------
+
+    def test_hs05_one_finding_per_third_party_destination_with_metrics(self) -> None:
+        hits = {
+            f["hookrisk"]["discriminator"]: f for f in by_check(scan("src/bad"), "hookrisk-external-call-in-swap-path")
+        }
+        self.assertEqual({"oracle", "rewards"}, set(hits))
+        oracle, rewards = hits["oracle"], hits["rewards"]
+        self.assertEqual("OracleDependentHook._beforeSwap", anchor(oracle))
+        self.assertEqual({"destination": "oracle", "isStatic": True, "unhandled": True}, oracle["hookrisk"]["metrics"])
+        self.assertIn("reverts every swap on every pool", oracle["description"])
+        self.assertEqual("OracleDependentHook._afterSwap", anchor(rewards))
+        self.assertEqual({"destination": "rewards", "isStatic": False, "unhandled": False}, rewards["hookrisk"]["metrics"])
+        self.assertIn("inside a try", rewards["description"])
+        for finding in hits.values():
+            self.assertEqual("Medium", finding["impact"])
+            self.assertEqual("external-call-in-swap-path", finding["hookrisk"]["ruleClass"])
+            # The in-file control: the PoolManager is not a third party.
+            self.assertNotIn("poolManager", finding["hookrisk"]["metrics"]["destination"])
+
+    # --- HS-06 ---------------------------------------------------------------
+
+    def test_hs06_fires_on_each_unbounded_source_and_not_on_the_bounded_one(self) -> None:
+        hits = {anchor(f): f for f in by_check(scan("src/bad"), "hookrisk-unbounded-dynamic-fee")}
+        self.assertEqual(
+            {
+                "OwnerSetFeeHook._beforeSwap",
+                "HookDataFeeHook._beforeSwap",
+                "OracleFeeHook._afterInitialize",
+                # OpenZeppelin's mock: the override lives under lib/, so the
+                # finding anchors on the project contract.
+                "UnboundedOverrideFeeHook",
+            },
+            set(hits),
+        )
+        self.assertIn("state variable `fee`", hits["OwnerSetFeeHook._beforeSwap"]["description"])
+        self.assertIn("parameter `newFee` of setFee", hits["OwnerSetFeeHook._beforeSwap"]["description"])
+        self.assertIn("caller-supplied data (abi.decode)", hits["HookDataFeeHook._beforeSwap"]["description"])
+        self.assertIn("external call `oracle.currentFee`", hits["OracleFeeHook._afterInitialize"]["description"])
+        self.assertIn("updateDynamicLPFee", hits["OracleFeeHook._afterInitialize"]["description"])
+        self.assertIn("state variable `_fee`", hits["UnboundedOverrideFeeHook"]["description"])
+        for finding in hits.values():
+            self.assertEqual("Medium", finding["impact"])
+            self.assertEqual("unbounded-dynamic-fee", finding["hookrisk"]["ruleClass"])
+            self.assertIn("require(fee <= MAX_FEE)", finding["description"])
+        # The in-file control: owner-settable, but `require(newFee <= MAX_FEE)`.
+        self.assertNotIn("BoundedOwnerFeeHook._beforeSwap", hits)
+        self.assertNotIn("BoundedOwnerFeeHook", hits)
 
 
 class LegacyCorpus(unittest.TestCase):

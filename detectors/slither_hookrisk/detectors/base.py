@@ -22,7 +22,11 @@ from __future__ import annotations
 from typing import ClassVar, Sequence
 
 from slither.core.declarations import Contract
-from slither.detectors.abstract_detector import AbstractDetector, DetectorClassification
+from slither.detectors.abstract_detector import (
+    AbstractDetector,
+    DetectorClassification,
+    classification_txt,
+)
 from slither.utils.output import Output
 
 from ..utils.hook_analysis import is_hook_contract
@@ -82,6 +86,7 @@ class HookriskDetector(AbstractDetector):
         metrics: dict[str, int | bool] | None = None,
         permissions: dict[str, bool] | None = None,
         callbacks: Sequence[str] | None = None,
+        impact: DetectorClassification | None = None,
     ) -> Output:
         """Build a Slither Output, tagging it with hookrisk metadata.
 
@@ -107,8 +112,16 @@ class HookriskDetector(AbstractDetector):
         per-contract measurements, the resolved permission set and the
         implemented callback names. They are optional at this level so every
         detector shares one writer, but only a classification should send them.
+
+        `impact` overrides the class-level severity for one finding. Slither
+        stamps `IMPACT` per detector class, but HS-03 reports two shapes of one
+        rule class — an unguarded mutator (High) and an owner-only one
+        (Medium) — and splitting them into two detector arguments would split
+        the rule class's identity with it. The CLI reads the per-result field.
         """
         output = self.generate_result(parts)
+        if impact is not None:
+            output.data["impact"] = classification_txt[impact]
         metadata: dict[str, object] = {
             "version": self.METADATA_VERSION,
             "ruleClass": self.RULE_CLASS,

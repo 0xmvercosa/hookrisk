@@ -52,6 +52,9 @@ address bits that nothing verifies.
 from __future__ import annotations
 
 from slither.core.declarations import Contract, Function, Modifier
+from slither.core.variables.state_variable import StateVariable
+from slither.slithir.operations import Assignment, Member, Phi, TypeConversion
+from slither.slithir.variables import Constant
 from slither.utils.output import Output
 
 from ..utils.hook_analysis import (
@@ -61,9 +64,11 @@ from ..utils.hook_analysis import (
     CallbackStatus,
     classify_callback,
     declared_permissions,
+    fully_lifted,
     implemented_callbacks,
     legacy_abi_evidence,
     resolve_override,
+    returned_values,
 )
 from ..utils.hooks_spec import CALLBACK_TO_FLAG, FLAG_BITS
 from .base import DetectorClassification, HookriskDetector
@@ -187,6 +192,65 @@ constructor revert, or a failing unit test that does not route through a real po
                 )
 
         results.extend(self._check_returns_delta(contract, declared))
+        results.extend(self._check_zero_delta(contract, declared, classified))
+        return results
+
+    #: Returns-delta field -> (parent callback, index of the delta in the
+    #: callback's return tuple). beforeSwap returns (selector, BeforeSwapDelta,
+    #: lpFeeOverride); the others return (selector, delta).
+    _DELTA_POSITION = {
+        "beforeSwapReturnDelta": ("beforeSwap", 1),
+        "afterSwapReturnDelta": ("afterSwap", 1),
+        "afterAddLiquidityReturnDelta": ("afterAddLiquidity", 1),
+        "afterRemoveLiquidityReturnDelta": ("afterRemoveLiquidity", 1),
+    }
+
+    def _check_zero_delta(self, contract: Contract, declared: dict[str, bool], classified: dict) -> list[Output]:
+        """A returns-delta flag whose callback can only ever return zero.
+
+        The third HS-02 case. The flag tells the PoolManager to read the
+        delta the hook returns and settle it; a callback that returns
+        `ZERO_DELTA` / `int128(0)` on every path has declared a power it
+        never uses. Not a liveness bug — the pool works — but the address
+        carries a custom-accounting bit for nothing, HS-07 classifies the
+        hook as a custom curve, the harness swaps its invariants, and a
+        reviewer budgets a math audit, all on a declaration the code
+        contradicts. Reported at Medium: the fix is one line either way
+        (drop the flag, or return the delta the author meant to).
+
+        Silent when the delta is computed or comes from a call — the point
+        is "can never be non-zero", not "is zero on some path".
+        """
+        results: list[Output] = []
+        for field, (parent, index) in self._DELTA_POSITION.items():
+            if not declared.get(field, False) or not declared.get(parent, False):
+                continue
+            callback, verdict = classified.get(parent, (None, None))
+            if callback is None or verdict is None or not verdict.is_implemented:
+                continue
+            returned = returned_values(callback.function, contract, index)
+            if not returned or not all(_always_zero(fn, value) for fn, value in returned):
+                continue
+            # "Every path returns zero" is only a claim about paths the tool
+            # read. A partially lifted delegate (HR-E205) keeps its early
+            # `return (selector, 0)` and loses the computed one.
+            if not all(fully_lifted(fn) for fn, _ in returned):
+                continue
+            body = self._user_code_for(contract, callback.function)
+            results.append(
+                self._report(
+                    [
+                        body,
+                        f" declares `{field}` (bit {FLAG_BITS[FIELD_TO_FLAG[field]]}) but its "
+                        f"`{parent}` returns a zero delta on every path. The flag costs an "
+                        "address bit, a custom-accounting classification and a math review "
+                        "for a delta the hook never returns; either drop the flag or return "
+                        "the delta the implementation was meant to.\n",
+                    ],
+                    discriminator=field,
+                    impact=DetectorClassification.MEDIUM,
+                )
+            )
         return results
 
     @staticmethod
@@ -327,6 +391,43 @@ class CustomAccountingDeclared(HookriskDetector):
                 ]
             )
         ]
+
+
+def _always_zero(function: Function, value: object, depth: int = 6) -> bool:
+    """Whether `value` can only be the zero delta.
+
+    A literal 0, a library's `ZERO_DELTA` constant, a conversion of either
+    (`int128(0)`), or a local whose every definition is one of those. A
+    call result (`toBeforeSwapDelta(...)`), arithmetic, or a parameter is
+    not: the delta is computed, and this check must not guess at its value.
+    """
+    if depth == 0:
+        return False
+    if isinstance(value, Constant):
+        return value.value == 0
+    if isinstance(value, StateVariable):
+        return value.is_constant and value.name == "ZERO_DELTA"
+    definitions = [ir for node in function.nodes for ir in node.irs if getattr(ir, "lvalue", None) is value]
+    if not definitions:
+        return False
+    for definition in definitions:
+        if isinstance(definition, Member):
+            # `BeforeSwapDeltaLibrary.ZERO_DELTA`: a reference produced by a
+            # Member on the library, not a state-variable read.
+            if not (isinstance(definition.variable_left, Contract) and str(definition.variable_right) == "ZERO_DELTA"):
+                return False
+        elif isinstance(definition, Assignment):
+            if not _always_zero(function, definition.rvalue, depth - 1):
+                return False
+        elif isinstance(definition, TypeConversion):
+            if not _always_zero(function, definition.variable, depth - 1):
+                return False
+        elif isinstance(definition, Phi):
+            if not all(_always_zero(function, rvalue, depth - 1) for rvalue in definition.rvalues):
+                return False
+        else:
+            return False
+    return True
 
 
 # Referenced by PERMISSION_FIELDS to keep the import used and the mapping honest.

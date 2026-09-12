@@ -28,19 +28,27 @@ from slither.core.cfg.node import Node, NodeType
 from slither.core.declarations import Contract, Function, Modifier
 from slither.core.declarations.solidity_variables import (
     SolidityCustomRevert,
+    SolidityVariable,
     SolidityVariableComposed,
 )
 from slither.core.variables.state_variable import StateVariable
-from slither.slithir.variables import Constant
+from slither.slithir.variables import Constant, ReferenceVariable, TupleVariable
 from slither.slithir.operations import (
+    Assignment,
     Binary,
     BinaryType,
+    Condition,
     HighLevelCall,
+    Index,
     InternalCall,
     LibraryCall,
     LowLevelCall,
+    Member,
+    Operation,
+    Return,
     SolidityCall,
     TypeConversion,
+    Unary,
 )
 
 from .hooks_spec import (
@@ -77,6 +85,19 @@ __all__ = [
     "owner_variables",
     "guards_owner",
     "owner_only_functions",
+    "Guard",
+    "access_guard",
+    "guard_kind",
+    "entry_point_mutators",
+    "callback_read_state",
+    "state_variables_written_by",
+    "calls_named_in",
+    "CallDestination",
+    "classify_destination",
+    "third_party_calls",
+    "definition_of",
+    "returned_values",
+    "fully_lifted",
 ]
 
 #: Callback names whose bodies constitute "the swap path" for HS-05.
@@ -691,18 +712,23 @@ def owner_only_functions(contract: Contract) -> list[Function]:
     an admin surface and the latter are the PoolManager's, judged by HS-01.
     View and pure functions are excluded too: a gated getter changes nothing
     on chain and is not what "owner-only functions" means to a reviewer.
+
+    Two shapes count. A comparison of `msg.sender` against an owner-like
+    variable (`guards_owner`), and a role lookup keyed by the sender that
+    decides a branch — OpenZeppelin's `AccessControl` (`onlyRole` →
+    `_checkRole` → `hasRole` → `_roles[role].hasRole[account]`), which has no
+    `==` anywhere and used to be reported as "no admin surface" on
+    StablePairHook. See `access_guard`.
     """
     owner_vars = owner_variables(contract)
-    if not owner_vars:
-        return []
-    callbacks = {cb.function for cb in implemented_callbacks(contract)}
+    pool_manager = pool_manager_variables(contract)
     gated: list[Function] = []
-    for function in contract.functions_entry_points:
-        if function.is_constructor or not function.is_implemented:
+    for function in entry_point_mutators(contract):
+        if owner_vars and guards_owner(function, owner_vars) is not None:
+            gated.append(function)
             continue
-        if function.view or function.pure or function in callbacks:
-            continue
-        if guards_owner(function, owner_vars) is not None:
+        guard = access_guard(function, contract)
+        if guard is not None and guard_kind(guard, pool_manager) == "role":
             gated.append(function)
     return gated
 
@@ -856,6 +882,13 @@ class ExternalCall:
     destination: str
     is_low_level: bool
     is_static: bool
+    #: The call operation itself, so a consumer can classify the destination
+    #: (`classify_destination`) without re-scanning the node's IR.
+    ir: Operation | None = None
+
+    @property
+    def function(self) -> Function:
+        return self.node.function
 
     @property
     def line(self) -> int:
@@ -890,6 +923,7 @@ def external_calls_in(functions: Iterable[Function]) -> list[ExternalCall]:
                             # Slither exposes view-ness of the callee when known.
                             is_static=bool(getattr(ir.function, "view", False))
                             or bool(getattr(ir.function, "pure", False)),
+                            ir=ir,
                         )
                     )
                 elif isinstance(ir, LowLevelCall):
@@ -899,8 +933,392 @@ def external_calls_in(functions: Iterable[Function]) -> list[ExternalCall]:
                             destination=str(ir.destination),
                             is_low_level=True,
                             is_static=str(ir.function_name) == "staticcall",
+                            ir=ir,
                         )
                     )
                 elif isinstance(ir, InternalCall):
                     continue
     return calls
+
+
+def definition_of(function: Function, variable: object) -> Operation | None:
+    """The operation in `function` whose lvalue is `variable`, first in CFG order."""
+    for node in function.nodes:
+        for ir in node.irs:
+            if getattr(ir, "lvalue", None) is variable:
+                return ir
+    return None
+
+
+def fully_lifted(function: Function) -> bool:
+    """Whether every statement of `function` has SlithIR.
+
+    Slither logs `Impossible to generate IR for <function>` and continues,
+    leaving the nodes it reached without IR (HR-E205). A check that reasons
+    over "every path" — the zero-delta case of HS-02 — would then see only the
+    paths that were lifted: OpenZeppelin's `BaseDynamicAfterFee._afterSwap`
+    keeps its early `return (selector, 0)` and loses the computed one, and
+    the hook is accused of never returning a delta. Silence is the only honest
+    answer for a function the tool did not fully read.
+    """
+    for node in function.nodes:
+        if node.type in (NodeType.RETURN, NodeType.EXPRESSION, NodeType.IF, NodeType.VARIABLE) and not node.irs:
+            if node.expression is not None:
+                return False
+    return True
+
+
+def returned_values(
+    function: Function, contract: Contract, index: int, _visited: set[int] | None = None
+) -> list[tuple[Function, object]]:
+    """The `index`-th component of every value `function` returns, delegates followed.
+
+    BaseHook's `beforeSwap` is `return _beforeSwap(...)`: a tuple variable
+    defined by an internal call, whose components live in the (overridden)
+    delegate's own return statements. Each (function, value) pair names the
+    function the value lives in, so a caller can keep tracing there.
+    """
+    visited = _visited if _visited is not None else set()
+    if id(function) in visited:
+        return []
+    visited.add(id(function))
+    found: list[tuple[Function, object]] = []
+    for node in function.nodes:
+        for ir in node.irs:
+            if not isinstance(ir, Return):
+                continue
+            values = list(ir.values)
+            if len(values) == 1 and isinstance(values[0], TupleVariable):
+                definition = definition_of(function, values[0])
+                if isinstance(definition, InternalCall) and isinstance(definition.function, Function):
+                    callee = resolve_override(contract, definition.function)
+                    found.extend(returned_values(callee, contract, index, visited))
+                continue
+            if len(values) > index:
+                found.append((function, values[index]))
+    return found
+
+
+# --------------------------------------------------------------------------- #
+# Access control in general (HS-03)
+# --------------------------------------------------------------------------- #
+
+
+def _is_sender(value: object) -> bool:
+    return isinstance(value, SolidityVariableComposed) and value.name == "msg.sender"
+
+
+@dataclass(frozen=True)
+class Guard:
+    """Where a function restricts its caller, and how.
+
+    `comparison`: an EQ/NE with one operand derived from `msg.sender`
+    (`require(msg.sender == admin)`, Ownable's `owner() != _msgSender()`,
+    `msg.sender == address(poolManager)`).
+    `role`: a mapping lookup keyed by a sender-derived value whose result
+    decides a branch or a `require` without passing through arithmetic —
+    AccessControl's `_roles[role].hasRole[account]` behind `if (!hasRole(...))`,
+    or a hand-rolled `require(isOperator[msg.sender])`. The "no arithmetic"
+    rule is what keeps `orderInfo.liquidity[msg.sender] == 0` (a balance
+    check in a user-facing function) from counting as access control.
+    """
+
+    node: Node
+    kind: str
+
+
+def access_guard(function: Function, contract: Contract | None = None) -> Guard | None:
+    """Find the node where `function` restricts `msg.sender`, of either kind.
+
+    The walk covers the body, every modifier and every internal callee
+    (override-resolved when `contract` is given), binding parameters to
+    sender-derived arguments on the way so that `_checkRole(role, _msgSender())`
+    still resolves to a lookup keyed by the sender three calls down.
+    `None` means the function is callable by anyone.
+    """
+    visited: set[tuple[int, frozenset[str]]] = set()
+
+    def walk(fn: Function, tainted_params: frozenset) -> tuple[Guard | None, bool, bool]:
+        """Returns (guard, returns a role lookup, returns a sender-derived value)."""
+        key = (id(fn), frozenset(p.name for p in tainted_params))
+        if key in visited:
+            return None, False, False
+        visited.add(key)
+
+        sender: set[object] = set(tainted_params)
+        role: set[object] = set()
+        # Values that come from storage or from the contract's own identity —
+        # what a caller is legitimately compared *against*. `_update(from, to)`
+        # in ERC20 checks `from == address(0)` on a sender-derived argument,
+        # and that is a null check, not access control: the other side must
+        # be an authority (a state variable, `address(this)`, a non-zero
+        # constant, `owner()`), never a parameter, a local or zero.
+        authority: set[object] = set()
+        returns_role = False
+        returns_sender = False
+
+        def from_sender(value: object) -> bool:
+            return _is_sender(value) or value in sender
+
+        def is_authority(value: object) -> bool:
+            if isinstance(value, StateVariable) or value in authority:
+                return True
+            if isinstance(value, Constant):
+                return bool(value.value)
+            return isinstance(value, SolidityVariable) and value.name == "this"
+
+        for node in fn.nodes:
+            for ir in node.irs:
+                if isinstance(ir, Assignment):
+                    if from_sender(ir.rvalue):
+                        sender.add(ir.lvalue)
+                    if ir.rvalue in role:
+                        role.add(ir.lvalue)
+                    if is_authority(ir.rvalue):
+                        authority.add(ir.lvalue)
+                elif isinstance(ir, TypeConversion):
+                    if from_sender(ir.variable):
+                        sender.add(ir.lvalue)
+                    if ir.variable in role:
+                        role.add(ir.lvalue)
+                    if is_authority(ir.variable):
+                        authority.add(ir.lvalue)
+                elif isinstance(ir, Unary):
+                    if ir.rvalue in role:
+                        role.add(ir.lvalue)
+                elif isinstance(ir, Binary):
+                    if ir.type in (BinaryType.EQUAL, BinaryType.NOT_EQUAL):
+                        left, right = ir.variable_left, ir.variable_right
+                        if (from_sender(left) and is_authority(right)) or (from_sender(right) and is_authority(left)):
+                            return Guard(node, "comparison"), returns_role, returns_sender
+                elif isinstance(ir, Index):
+                    if from_sender(ir.variable_right) or ir.variable_left in role:
+                        role.add(ir.lvalue)
+                    elif is_authority(ir.variable_left):
+                        authority.add(ir.lvalue)
+                elif isinstance(ir, Member):
+                    if ir.variable_left in role:
+                        role.add(ir.lvalue)
+                    elif is_authority(ir.variable_left):
+                        authority.add(ir.lvalue)
+                elif isinstance(ir, InternalCall) and isinstance(ir.function, Function):
+                    callee = ir.function
+                    if contract is not None and not isinstance(callee, Modifier):
+                        callee = resolve_override(contract, callee)
+                    bound = frozenset(
+                        param
+                        for param, argument in zip(callee.parameters, ir.arguments)
+                        if from_sender(argument)
+                    )
+                    guard, callee_role, callee_sender = walk(callee, bound)
+                    if guard is not None:
+                        return guard, returns_role, returns_sender
+                    if ir.lvalue is not None:
+                        if callee_role:
+                            role.add(ir.lvalue)
+                        if callee_sender:
+                            sender.add(ir.lvalue)
+                        elif callee.all_state_variables_read():
+                            # `owner()`: a value read from storage by the callee.
+                            authority.add(ir.lvalue)
+                elif isinstance(ir, SolidityCall):
+                    if str(ir.function.name).startswith(("require", "assert")) and any(
+                        argument in role for argument in ir.arguments
+                    ):
+                        return Guard(node, "role"), returns_role, returns_sender
+                elif isinstance(ir, Condition):
+                    if ir.value in role:
+                        return Guard(node, "role"), returns_role, returns_sender
+                elif isinstance(ir, Return):
+                    returns_role = returns_role or any(value in role for value in ir.values)
+                    returns_sender = returns_sender or any(from_sender(value) for value in ir.values)
+
+        for modifier in fn.modifiers:
+            if isinstance(modifier, Function):
+                guard, _, _ = walk(modifier, frozenset())
+                if guard is not None:
+                    return guard, returns_role, returns_sender
+        return None, returns_role, returns_sender
+
+    guard, _, _ = walk(function, frozenset())
+    return guard
+
+
+def guard_kind(guard: Guard, pool_manager_vars: set[StateVariable]) -> str:
+    """`pool-manager`, `role` or `admin`.
+
+    A comparison against the PoolManager is HS-01's guard: it makes the
+    function the PoolManager's, not an administrator's. Everything else that
+    restricts the caller is an admin surface of one shape or the other.
+    """
+    if guard.kind == "role":
+        return "role"
+    if pool_manager_vars and _compares_sender_to(guard.node, pool_manager_vars):
+        return "pool-manager"
+    return "admin"
+
+
+def entry_point_mutators(contract: Contract) -> list[Function]:
+    """External or public, non-view functions that are not the hook's callbacks.
+
+    The constructor, the IHooks callbacks (HS-01's business) and
+    `unlockCallback` (the PoolManager's re-entry, guarded on it) are excluded.
+    """
+    callbacks = {cb.function for cb in implemented_callbacks(contract)}
+    mutators: list[Function] = []
+    for function in contract.functions_entry_points:
+        if function.is_constructor or not function.is_implemented:
+            continue
+        if function.view or function.pure or function in callbacks:
+            continue
+        if function.name == "unlockCallback":
+            continue
+        mutators.append(function)
+    return mutators
+
+
+def callback_read_state(contract: Contract) -> set[StateVariable]:
+    """State variables read by the implemented callbacks or anything they reach."""
+    read: set[StateVariable] = set()
+    for callback in implemented_callbacks(contract):
+        if not classify_callback(callback.function, contract).is_implemented:
+            continue
+        for function in reachable_functions(callback.function, contract) | {callback.function}:
+            read |= set(function.state_variables_read)
+    return read
+
+
+def state_variables_written_by(function: Function, contract: Contract) -> set[StateVariable]:
+    """State variables written by `function` or anything it reaches."""
+    written: set[StateVariable] = set()
+    for fn in reachable_functions(function, contract) | {function}:
+        written |= set(fn.state_variables_written)
+    return written
+
+
+def calls_named_in(function: Function, contract: Contract, names: frozenset[str]) -> list[Node]:
+    """Nodes in `function` or its callees that make a high-level or library call named in `names`."""
+    hits: list[Node] = []
+    for fn in reachable_functions(function, contract) | {function}:
+        for node in fn.nodes:
+            for ir in node.irs:
+                if isinstance(ir, (HighLevelCall, LibraryCall)) and str(ir.function_name) in names:
+                    hits.append(node)
+                    break
+    return hits
+
+
+# --------------------------------------------------------------------------- #
+# Destinations of swap-path calls (HS-05)
+# --------------------------------------------------------------------------- #
+
+#: Interface names under which a pool currency is addressed once unwrapped.
+_ERC20_TYPES = frozenset({"IERC20", "IERC20Minimal", "ERC20", "IERC20Metadata", "IERC20Permit"})
+
+
+@dataclass(frozen=True)
+class CallDestination:
+    """What a swap-path call talks to, and the name to report it by."""
+
+    #: `pool-manager`, `library`, `own-currency` or `third-party`.
+    kind: str
+    label: str
+
+    @property
+    def is_third_party(self) -> bool:
+        return self.kind == "third-party"
+
+
+def _definition_of(function: Function, variable: object) -> Operation | None:
+    """The operation in `function` whose lvalue is `variable`, first by CFG order."""
+    for node in function.nodes:
+        for ir in node.irs:
+            if getattr(ir, "lvalue", None) is variable:
+                return ir
+    return None
+
+
+def classify_destination(call: ExternalCall, pool_manager_vars: set[StateVariable]) -> CallDestination:
+    """Decide whether a swap-path call leaves the pool's own trust boundary.
+
+    Excluded, in order: library calls that Slither surfaces as high-level
+    calls on a library contract (`StateLibrary`, `CurrencyLibrary`); the
+    PoolManager, by variable or by type; and the pool's own currencies — a
+    `Currency`-typed destination, or an ERC-20 interface whose address came
+    from `key.currency0`/`key.currency1` (through `Currency.unwrap` or a
+    plain conversion) within the same function. Everything else is a third
+    party: an oracle, another protocol, an arbitrary address.
+
+    The label names the destination by the variable it was read from, so two
+    calls on the same oracle are reported once and a `TMP_17` never reaches a
+    report.
+    """
+    ir = call.ir
+    destination = getattr(ir, "destination", None)
+    if isinstance(destination, Contract):
+        return CallDestination("library" if destination.is_library else "third-party", destination.name)
+
+    type_name = str(getattr(destination, "type", ""))
+    if destination in pool_manager_vars or type_name in _POOL_MANAGER_TYPES or type_name.endswith("PoolManager"):
+        return CallDestination("pool-manager", str(destination))
+    if type_name == "Currency":
+        return CallDestination("own-currency", str(destination))
+
+    # Follow the destination back to what it was made from, within the function.
+    origin = destination
+    own_currency = False
+    produced_by: str | None = None
+    members: list[str] = []
+    for _ in range(8):
+        definition = _definition_of(call.function, origin)
+        if isinstance(definition, TypeConversion):
+            origin = definition.variable
+        elif isinstance(definition, Assignment):
+            origin = definition.rvalue
+        elif isinstance(definition, LibraryCall) and str(definition.function_name) == "unwrap" and definition.arguments:
+            origin = definition.arguments[0]
+        elif isinstance(definition, Member):
+            if str(definition.variable_right) in ("currency0", "currency1"):
+                own_currency = True
+                break
+            # `pool.config.treasury()`: keep the path so the label reads as
+            # the source does, then keep walking towards the base variable.
+            members.insert(0, str(definition.variable_right))
+            origin = definition.variable_left
+        elif isinstance(definition, (InternalCall, HighLevelCall, LibraryCall)):
+            # `getCurrencyYieldSource(currency).convertToAssets(...)`: the
+            # address is whatever the call returned; name it by the call.
+            callee = getattr(definition, "function", None)
+            produced_by = f"{getattr(callee, 'name', None) or definition.function_name}()"
+            break
+        else:
+            break
+        if str(getattr(origin, "type", "")) == "Currency":
+            own_currency = True
+            break
+    if own_currency and (type_name in _ERC20_TYPES or type_name == "address"):
+        return CallDestination("own-currency", str(origin))
+
+    base = origin.points_to_origin if isinstance(origin, ReferenceVariable) else origin
+    label = getattr(base, "name", None) if not isinstance(base, (Constant, Contract)) else None
+    if label and not label.startswith(("TMP_", "REF_")):
+        label = ".".join([label, *members])
+    elif produced_by is not None:
+        label = produced_by
+    else:
+        expression = str(call.node.expression) if call.node.expression is not None else str(destination)
+        # `x = oracle.price()` names the assignment, not the destination.
+        expression = expression.split("=", 1)[1].strip() if "=" in expression else expression
+        label = expression if len(expression) <= 72 else expression[:69] + "..."
+    return CallDestination("third-party", label)
+
+
+def third_party_calls(contract: Contract) -> list[tuple[ExternalCall, CallDestination]]:
+    """Swap-path calls that leave the pool's trust boundary, with their destination."""
+    pool_manager = pool_manager_variables(contract)
+    found: list[tuple[ExternalCall, CallDestination]] = []
+    for call in external_calls_in(swap_path_functions(contract)):
+        destination = classify_destination(call, pool_manager)
+        if destination.is_third_party:
+            found.append((call, destination))
+    return found

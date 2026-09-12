@@ -44,6 +44,7 @@ from ..utils.hook_analysis import (
     reachable_functions,
     state_writes_in,
     swap_path_functions,
+    third_party_calls,
 )
 from ..utils.hooks_spec import CALLBACK_TO_FLAG
 from .base import DetectorClassification, HookriskDetector
@@ -106,6 +107,10 @@ class HookProfile(HookriskDetector):
             "callbacksDeclared": declared_callbacks,
             "stateWritesInCallbacks": state_writes_in(set(working_roots) | reachable),
             "externalCallsInSwapPath": len(external_calls_in(swap_path_functions(contract))),
+            # The raw count above includes the PoolManager's own settlement
+            # calls and the pool's tokens; the scorer's externalDependencies
+            # input is the count after those are excluded (HS-05's view).
+            "externalCallsInSwapPathThirdParty": len(third_party_calls(contract)),
             "internalFunctionsReachableFromCallbacks": len(internal),
             "usesReturnsDelta": uses_returns_delta,
             "hasOwnerOnlyFunctions": bool(owner_only_functions(contract)),

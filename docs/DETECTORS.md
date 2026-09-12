@@ -13,15 +13,15 @@ exists precisely for the contracts that scoping excludes.
 | Rule | Finds | Impact | Status |
 |---|---|---|---|
 | [HS-01](#hs-01) | Callback anyone can call | High | ✅ |
-| [HS-02](#hs-02) | Permissions vs implementation | High | ✅ |
+| [HS-02](#hs-02) | Permissions vs implementation; a returns-delta flag whose callback only returns zero | High / Medium | ✅ |
+| [HS-03](#hs-03) | Admin surface: unguarded mutator of callback-read state (High), owner-only one (Medium) | High / Medium | ✅ |
+| [HS-05](#hs-05) | External call in the swap path to a third party | Medium | ✅ |
+| [HS-06](#hs-06) | Dynamic fee or lpFeeOverride with no ceiling | Medium | ✅ |
 | [HS-07](#hs-07) | Custom accounting in use | Info | ✅ |
 | [disabled-callback](#disabled-callback) | Callback refused by design | Info | ✅ |
 | [unsupported-abi](#unsupported-abi) | Hook on an interface hookrisk cannot read | Info | ✅ |
 | [hook-profile](#hook-profile) | Per-contract profile: permissions, callbacks, complexity metrics | Info | ✅ |
-| [HS-03](#not-yet-implemented) | Admin surface | — | ✖ |
 | [HS-04](#not-yet-implemented) | Upgradeability | — | ✖ (covered by BlockSec) |
-| [HS-05](#not-yet-implemented) | External call in swap path | — | ✖ |
-| [HS-06](#not-yet-implemented) | Unbounded dynamic fee | — | ✖ |
 | [HS-08](#not-yet-implemented) | Rounding direction | — | ✖ |
 
 ---
@@ -171,8 +171,223 @@ once, collapsed them into one. Every finding now carries
 HS-01 and disabled-callback. Same class, same element, different discriminator
 means different finding.
 
+### A third case: the flag declared, the delta never returned
+
+`afterSwapReturnDelta: true` while `_afterSwap` returns `int128(0)` (or
+`ZERO_DELTA`) on every path. Not a liveness bug — the pool works — but the
+address carries a custom-accounting bit for nothing: HS-07 classifies the
+hook as a custom curve, the harness swaps its invariants, and a reviewer
+budgets a math audit, all on a declaration the code contradicts. Reported at
+**Medium**, discriminator the field name, anchored on the developer's
+delegate.
+
+Silent when the delta is computed or comes from a call
+(`toBeforeSwapDelta(...)`): the claim is "can never be non-zero", not "is
+zero on some path". Silent too when the delegate is not fully lifted to IR
+(HR-E205): OpenZeppelin's `BaseDynamicAfterFee._afterSwap` at some pins keeps
+its early `return (selector, 0)` and loses the computed one, and "every
+path" would then mean "every path the tool read". HookGuard has the same idea
+as `DELTA_FLAG_UNUSED` (a regex for a zero second element); this one follows
+the delegate and its return statements.
+
 [`hook_analysis.py`](../detectors/slither_hookrisk/utils/hook_analysis.py) ·
-`classify_callback`, `unconditional_revert`, `is_project_source`, `resolve_override`
+`classify_callback`, `unconditional_revert`, `is_project_source`, `resolve_override`,
+`returned_values`, `fully_lifted`
+
+---
+
+<a id="hs-03"></a>
+## HS-03 — Admin surface
+
+`hookrisk-admin-surface` · rule class `admin-surface` · **High** (unguarded) / **Medium** (owner-only)
+
+### The defect
+
+A hook's callbacks read parameters — a fee, a pause flag, a whitelist, an
+oracle address — that some external function writes. Who may call that
+function decides how much of the swap's economics is in a third party's hands.
+
+- **Unguarded, High.** A public or external function writes a scalar the
+  callbacks read, or calls `updateDynamicLPFee`, and compares `msg.sender`
+  to nothing at all. Hacken's audit guide lists exactly this
+  (`updatePool(address)` callable by anyone) next to the missing PoolManager
+  check; their checker brute-forces eight setter selectors to find it.
+- **Owner-only, Medium.** The same function restricted to an owner or a role:
+  the framework's "autonomous parameter updates / admin key" concern. The
+  finding lists the callback-read variables the function writes, so the
+  reader can judge what the key controls; the scorer raises
+  `autonomousParameterUpdates` from it.
+
+### How it detects
+
+Structural, like HS-01, generalised. `access_guard` walks the body, every
+modifier and every internal callee (override-resolved), binding parameters to
+sender-derived arguments, and recognises two shapes:
+
+- a **comparison** (`==`/`!=`) between a sender-derived value and an
+  *authority* — a state variable, `address(this)`, a non-zero constant, or a
+  callee result read from storage (`owner()`). `from == address(0)` inside
+  ERC20's `_update`, reached from `_burn(msg.sender, ...)`, is a null check
+  and does not count;
+- a **role lookup**: a mapping read keyed by a sender-derived value whose
+  result decides a branch or a `require` without passing through arithmetic.
+  That is OpenZeppelin's `AccessControl` (`onlyRole` → `_checkRole` →
+  `hasRole` → `_roles[role].hasRole[account]`), which has no `==` anywhere.
+  The "no arithmetic" rule is what keeps `orderInfo.liquidity[msg.sender] == 0`
+  — a balance check in a limit-order hook's `cancelOrder` — from counting.
+
+A comparison against the PoolManager is HS-01's guard (the function is the
+PoolManager's, not an administrator's) and such functions are skipped, as is
+`unlockCallback`.
+
+### The mapping rule, and what it misses
+
+For the **unguarded** shape only *non-mapping* state counts. A limit-order
+hook's `placeOrder` writes `_orderInfos[id]` — state its `afterSwap` reads —
+and is rightly callable by anyone: per-user records live in mappings,
+parameters live in scalars. An unguarded write to a mapping the callbacks
+read (an open whitelist, a per-pool config keyed by `PoolId`) is therefore
+**missed** by this shape. The owner-only shape keeps the broad rule because
+the guard already says the writer is privileged; it also counts
+`take`/`settle`/`transfer` (a privileged sweep). An unguarded value move is
+not reported: telling a user's `withdraw` from an open sweep needs the
+accounting, not the call.
+
+The guard's own bookkeeping — Ownable's `_owner`, AccessControl's `_roles`,
+which a callback running `onlyOwner` reads — is excluded from "state the
+callbacks read", so `transferOwnership` is not an economic lever. Per-user
+authorisation (`msg.sender == orders[id].owner`) compares against a mapping
+read and is not recognised as a guard; a function relying on it that writes a
+callback-read scalar would be reported as unguarded.
+
+### On real hooks
+
+CorkHook: `updateBaseFeePercentage` and `updateTreasurySplitPercentage` at
+Medium (owner-only, writing the pool config `beforeSwap` reads).
+StablePairHook: `initializePool` at Medium through `onlyRole` — the
+AccessControl surface the profile used to report as absent. OpenZeppelin's
+`BaseDynamicFeeMock.setFee` and `BaseOverrideFeeMock.setFee` at High: the
+mocks ship an unguarded fee setter. Nothing on `Counter` or `AntiSandwichMock`.
+
+[`hs03_admin_surface.py`](../detectors/slither_hookrisk/detectors/hs03_admin_surface.py) ·
+[`hook_analysis.py`](../detectors/slither_hookrisk/utils/hook_analysis.py) ·
+`access_guard`, `guard_kind`, `entry_point_mutators`, `callback_read_state`
+
+---
+
+<a id="hs-05"></a>
+## HS-05 — External call in the swap path
+
+`hookrisk-external-call-in-swap-path` · rule class `external-call-in-swap-path` · **Medium**
+
+### The defect
+
+`beforeSwap` and `afterSwap` run inside every swap on every pool the hook is
+attached to. A call from there to a third party — a price oracle, another
+protocol, an address read from storage, the swapper's own contract — makes
+each of those swaps depend on that address being live and returning. An
+oracle that pauses pauses the pool. That is a liveness consequence before it
+is a correctness one, which is why the finding distinguishes an *unhandled*
+call (not inside `try`) from a handled one, and a static read from a
+state-changing call. HookGuard's `REVERT_DOS_RISK` is the same framing with
+a regex; the framework scores the class as `externalDependencies`.
+
+### How it detects
+
+`external_calls_in(swap_path_functions(...))` was already computed for the
+profile's raw count. `classify_destination` now sorts each call: library
+calls Slither surfaces as high-level calls on a library contract
+(`StateLibrary`, `CurrencyLibrary`) are not external; the PoolManager, by
+variable or by type, is the pool itself; a `Currency`-typed destination, or
+an ERC-20 interface whose address came from `key.currency0`/`key.currency1`
+(through `Currency.unwrap` or a plain conversion) is the pool's own token.
+Everything else is a third party, reported once per destination — named by
+the variable it was read from, or by the call that produced it
+(`getCurrencyYieldSource()`), never as `TMP_17`.
+
+The finding carries `metrics: {destination, isStatic, unhandled}` so the
+scorer can weigh a static read below a state-changing dependency, and the
+profile carries `externalCallsInSwapPathThirdParty` next to the raw count.
+
+### What it misses
+
+Whether the call is *safe*: an oracle can be correct and still be a
+dependency. A call on an ERC-20 whose address is not derived from the key in
+the same function is a third party even when it is, in fact, one of the
+pool's tokens (a token address cached in storage). Low-level calls are
+reported as unhandled unless inside `try`; whether the hook checks the
+success flag is not analysed.
+
+### On real hooks
+
+CorkHook: three destinations — `forwarder` (state-changing, unhandled),
+`sender` (the swapper's flash-swap callback) and a static read on the
+config contract; the profile's raw count of 5 becomes a third-party count of
+5. OpenZeppelin's re-hypothecation mocks: the ERC-4626 yield source, named by
+`getCurrencyYieldSource()`. `AntiSandwichMock` (2 raw calls, both on the
+PoolManager) and `Counter`: none.
+
+[`hs05_external_call.py`](../detectors/slither_hookrisk/detectors/hs05_external_call.py) ·
+[`hook_analysis.py`](../detectors/slither_hookrisk/utils/hook_analysis.py) ·
+`classify_destination`, `third_party_calls`
+
+---
+
+<a id="hs-06"></a>
+## HS-06 — Unbounded dynamic fee
+
+`hookrisk-unbounded-dynamic-fee` · rule class `unbounded-dynamic-fee` · **Medium**
+
+### The defect
+
+A hook sets the pool's LP fee two ways: `poolManager.updateDynamicLPFee(key,
+fee)`, or an `lpFeeOverride` returned from `beforeSwap` with
+`OVERRIDE_FEE_FLAG` set. The PoolManager rejects only fees above 100 %.
+Everything below is the hook's word, and if the value comes from a storage
+slot an owner can set, from an oracle, or from the `hookData` the swapper
+supplies, nothing in the contract says what the next swap will pay. Hacken's
+guide calls this "excessive or invalid `lpFeeOverride`"; HookGuard fires the
+same idea on 11 % of real hooks with two regexes.
+
+### How it detects
+
+Provenance, not names. From each fee site the value is traced back through
+SlithIR — assignments, conversions, arithmetic, internal calls
+(override-resolved, so `_getFee` lands on the hook's override), struct
+fields, mapping reads, `abi.decode` — to its sources. For a state variable
+the functions that write it are traced too, because
+`setFee(uint24 f) { require(f <= MAX_FEE); fee = f; }` is where a ceiling
+normally lives.
+
+The fee is **bounded** when, anywhere along that chain, a variable of the
+chain is compared (`<`, `<=`, `>`, `>=`) against a `constant` or
+`immutable` (a ternary clamp is an `if` on that comparison), masked with a
+constant, passed to `LPFeeLibrary.validate`/`isValid`, clamped with `min`,
+or is itself a constant. Otherwise the finding names the sources
+(`state variable \`fee\`, parameter \`newFee\` of setFee`;
+`caller-supplied data (abi.decode)`; `external call \`oracle.currentFee\``)
+and says what a ceiling would look like. A `beforeSwap` return without the
+override flag on its chain is the pool's own fee and is ignored.
+
+### What it misses
+
+A ceiling enforced somewhere the chain does not reach — a governance
+contract that only proposes valid fees, an off-chain keeper — is invisible,
+and reported: the contract cannot prove it. A comparison against a *mutable*
+state variable (`fee <= maxFee` where `maxFee` is itself settable) is not a
+ceiling and does not count. Arithmetic is bounded only when every operand
+is, so `baseFee + volatility` with a bounded `baseFee` and an unbounded
+`volatility` is reported, correctly.
+
+### On real hooks
+
+OpenZeppelin's `BaseDynamicFee` and `BaseOverrideFee` mocks: reported, at the
+base's `_afterInitialize`/`_beforeSwap` — the mocks' `setFee` has no ceiling,
+so the fee really is unbounded. CorkHook does not set an LP fee (its fee is
+taken through a returns-delta) and is silent. Nothing on `Counter` or
+`AntiSandwichMock`.
+
+[`hs06_dynamic_fee.py`](../detectors/slither_hookrisk/detectors/hs06_dynamic_fee.py)
 
 ---
 
@@ -286,10 +501,11 @@ The block it carries (see [the engine contract](#the-engine-contract)):
 | `metrics.callbacksImplemented` | `len(callbacks)`. |
 | `metrics.callbacksDeclared` | Callback permissions set to true. Returns-delta flags are not callbacks and are not counted. |
 | `metrics.stateWritesInCallbacks` | State-variable writes reachable from the implemented callbacks through internal calls and modifiers, after override resolution, one per (node, variable). Inherited library logic counts: a limit-order book that keeps its state in `lib/` still mutates it on every swap. |
-| `metrics.externalCallsInSwapPath` | High- and low-level calls from `beforeSwap`/`afterSwap` and everything they reach. Library calls excluded. The HS-05 input. |
+| `metrics.externalCallsInSwapPath` | High- and low-level calls from `beforeSwap`/`afterSwap` and everything they reach. Library calls excluded. Raw: includes the PoolManager's own settlement calls. |
+| `metrics.externalCallsInSwapPathThirdParty` | Of those, the calls that leave the pool's trust boundary — not the PoolManager, not a library, not the pool's own currencies ([HS-05](#hs-05)'s classification). The `externalDependencies` input; the raw count is kept for complexity. |
 | `metrics.internalFunctionsReachableFromCallbacks` | Distinct implemented functions (modifiers excluded) reachable from the implemented callbacks. |
 | `metrics.usesReturnsDelta` | Any returns-delta permission declared. |
-| `metrics.hasOwnerOnlyFunctions` | Some external/public, non-view, non-callback function compares `msg.sender` against an owner-like state variable — `require(msg.sender == admin)` inline, or OpenZeppelin's `onlyOwner` → `_checkOwner()` → `owner() != _msgSender()`, whose operands are resolved through the callees. The HS-03 input. |
+| `metrics.hasOwnerOnlyFunctions` | Some external/public, non-view, non-callback function is gated on an owner-like state variable — `require(msg.sender == admin)` inline, or OpenZeppelin's `onlyOwner` → `_checkOwner()` → `owner() != _msgSender()`, whose operands are resolved through the callees — or on a role lookup keyed by the sender (OpenZeppelin's `AccessControl`, see [HS-03](#hs-03)). The scorer's "owner-only mutators exist" input. |
 
 The complexity dimension is *derived* from these metrics by the scoring layer,
 with brackets recorded in `schema/framework-rubric.json` as an interpretation.
@@ -307,12 +523,14 @@ unmeasured.
 
 ### Known trade-offs
 
-- `hasOwnerOnlyFunctions` recognises comparisons, not role lookups.
-  `AccessControl`'s `hasRole(role, msg.sender)` is a mapping read followed by a
-  boolean branch with no `==`, and is not detected. Owner-like variables are
-  found by name (`owner`, `admin`, `governance`, `guardian`, …), which is the
-  weak direction on purpose: a miss costs one false "no admin surface", a hit
-  scores nothing by itself.
+- `hasOwnerOnlyFunctions` recognises two shapes: a comparison against an
+  owner-like variable, found by name (`owner`, `admin`, `governance`,
+  `guardian`, …) — the weak direction on purpose, since a hit scores nothing
+  by itself — and a role lookup keyed by the sender that decides a branch
+  (`AccessControl`, recognised by what it does, not by name; StablePairHook
+  used to be reported as having no admin surface). A comparison against a
+  state variable with an unfamiliar name (`require(msg.sender == treasury)`)
+  is still not counted here, though HS-03 does treat it as a guard.
 - Writes through a storage pointer (`Checkpoint storage c = _checkpoints[id];
   c.blockNumber = …`) are recorded by Slither against the local reference,
   not the state variable, and are under-counted.
@@ -358,11 +576,12 @@ dimension unmeasurable and that consequence should be legible.
 
 | Rule | Would find | Dimension left unmeasured |
 |---|---|---|
-| **HS-03** | Privileged surface: fee setters, pause, sweep; whether an EOA or a contract controls it | `complexity`, refines `upgradeability` — the [profile](#hook-profile)'s `hasOwnerOnlyFunctions` is the first input |
 | **HS-04** | DELEGATECALL to mutable code, EIP-1967 slots, `upgradeTo` | `upgradeability` — **unless BlockSec runs** |
-| **HS-05** | Calls inside before/afterSwap to anything but the PoolManager and the pair's tokens | `externalDependencies` — the [profile](#hook-profile)'s `externalCallsInSwapPath` counts them, without yet judging the destination |
-| **HS-06** | Dynamic fee with no ceiling, no rate limit, or the wrong controller | refines `priceImpactingBehavior` |
 | **HS-08** | Rounding that resolves in the caller's favour on an exit path | refines `customMath` |
+
+[HS-03](#hs-03) still does not say whether an EOA or a contract holds the
+key (that is deployed mode's `owner()` codesize read), and
+[HS-06](#hs-06) does not look for a rate limit, only a ceiling.
 
 HS-04 is the clearest illustration of why the multi-engine design is not
 decoration: enabling BlockSec turns `upgradeability` from unmeasurable into

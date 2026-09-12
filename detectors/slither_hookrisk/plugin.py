@@ -23,6 +23,9 @@ from .detectors.hs02_flag_divergence import (
     CustomAccountingDeclared,
     FlagImplementationDivergence,
 )
+from .detectors.hs03_admin_surface import AdminSurface
+from .detectors.hs05_external_call import ExternalCallInSwapPath
+from .detectors.hs06_dynamic_fee import UnboundedDynamicFee
 from .detectors.unsupported_abi import UnsupportedHookAbi
 
 #: Every detector, most severe class first. The classifications come last;
@@ -31,6 +34,9 @@ from .detectors.unsupported_abi import UnsupportedHookAbi
 DETECTORS: list[Type[AbstractDetector]] = [
     UnprotectedHookCallback,
     FlagImplementationDivergence,
+    AdminSurface,
+    ExternalCallInSwapPath,
+    UnboundedDynamicFee,
     CustomAccountingDeclared,
     CallbackIntentionallyDisabled,
     UnsupportedHookAbi,

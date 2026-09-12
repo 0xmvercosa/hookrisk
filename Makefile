@@ -19,7 +19,7 @@ PYTHON    = $(shell [ -x $(VENV)/bin/python ] && echo $(VENV)/bin/python || echo
 PIP       = $(shell [ -x $(VENV)/bin/pip ] && echo $(VENV)/bin/pip || echo pip3)
 SLITHER   = $(shell [ -x $(VENV)/bin/slither ] && echo $(VENV)/bin/slither || echo slither)
 
-DETECTOR_ARGS := hookrisk-unprotected-callback,hookrisk-flag-divergence,hookrisk-custom-accounting,hookrisk-disabled-callback,hookrisk-unsupported-abi,hookrisk-hook-profile
+DETECTOR_ARGS := hookrisk-unprotected-callback,hookrisk-flag-divergence,hookrisk-admin-surface,hookrisk-external-call-in-swap-path,hookrisk-unbounded-dynamic-fee,hookrisk-custom-accounting,hookrisk-disabled-callback,hookrisk-unsupported-abi,hookrisk-hook-profile
 
 .PHONY: help
 help: ## Show this help
@@ -100,7 +100,10 @@ test-cli: ## TypeScript: engines, scoring, config
 # One JSON scan per corpus directory, gated with jq rather than by grepping the
 # human-readable log. The three gates are deliberately asymmetric:
 #
-#   bad     must produce at least one High finding — the detectors work.
+#   bad     must produce at least one High and at least one Medium finding —
+#           the detectors work at both severities (HS-03's owner-only shape,
+#           HS-05 and HS-06 report at Medium; a gate that only asked for a
+#           High would not notice all three going silent).
 #   good    must produce nothing at High or Medium, and nothing from the
 #           unsupported-ABI classification (every good hook is on the current
 #           interface). Informational classifications are allowed: OZ's
@@ -122,13 +125,15 @@ test-cli: ## TypeScript: engines, scoring, config
 # run last; it needs only the standard library.
 CORPUS_SCAN = cd corpus && $(abspath $(SLITHER)) $(1) --detect $(DETECTOR_ARGS) --exclude-dependencies --fail-none --json - 2>/dev/null
 JQ_SEVERE  = [.results.detectors[] | select(.impact == "High" or .impact == "Medium")] | length
+JQ_HIGH    = [.results.detectors[] | select(.impact == "High")] | length
+JQ_MEDIUM  = [.results.detectors[] | select(.impact == "Medium")] | length
 
 .PHONY: test-corpus
 test-corpus: ## Detectors must fire on corpus/src/bad, stay silent on src/good, and admit src/legacy is unreadable
 	@command -v jq >/dev/null || { echo "FAIL: jq is required for the corpus gates"; exit 1; }
-	@echo "--- corpus/src/bad (must fire at High) ---"
-	@$(call CORPUS_SCAN,src/bad) | jq -e '.success and (($(JQ_SEVERE)) > 0)' >/dev/null \
-		|| { echo "FAIL: detectors found nothing severe in the positive corpus"; exit 1; }
+	@echo "--- corpus/src/bad (must fire at High and at Medium) ---"
+	@$(call CORPUS_SCAN,src/bad) | jq -e '.success and (($(JQ_HIGH)) > 0) and (($(JQ_MEDIUM)) > 0)' >/dev/null \
+		|| { echo "FAIL: detectors found nothing at High, or nothing at Medium, in the positive corpus"; exit 1; }
 	@echo "--- corpus/src/good (nothing at High or Medium, no unsupported-ABI) ---"
 	@$(call CORPUS_SCAN,src/good) | jq -e '.success and (($(JQ_SEVERE)) == 0) and ([.results.detectors[] | select(.check == "hookrisk-unsupported-abi")] | length == 0)' >/dev/null \
 		|| { echo "FAIL: false positive on the negative corpus"; exit 1; }
