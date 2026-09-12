@@ -21,7 +21,7 @@ import { Ajv2020 as Ajv, type ValidateFunction } from 'ajv/dist/2020.js';
 import { HookriskError } from './errors.js';
 import type { ScoreResult } from './scoring/score.js';
 import type { EngineResult, Finding, Severity } from './types.js';
-import { SEVERITIES, severityRank } from './types.js';
+import { SEVERITIES, isClassification, severityRank } from './types.js';
 import type { UncoveredFunction } from './engines/slither.js';
 import type { GatePolicy } from './config.js';
 
@@ -162,6 +162,7 @@ function serialiseFinding(finding: Finding): Record<string, unknown> {
     confidence: finding.confidence,
     location: finding.location,
     ...(finding.function ? { function: finding.function } : {}),
+    ...(finding.discriminator ? { discriminator: finding.discriminator } : {}),
     evidence: finding.evidence,
     engines: finding.engines.map((e) => ({
       engine: e.engine,
@@ -259,7 +260,7 @@ function evaluateGate(
   if (policy.maxSeverity) {
     const threshold = severityRank(policy.maxSeverity as Severity);
     const breaching = findings.filter(
-      (f) => severityRank(f.severity) >= threshold && f.ruleClass !== 'custom-accounting',
+      (f) => severityRank(f.severity) >= threshold && !isClassification(f.ruleClass),
     );
     if (breaching.length > 0) {
       failures.push(

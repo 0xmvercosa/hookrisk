@@ -298,7 +298,6 @@ Exit code `30`.
 
 ```text
 build-info is not a directory
-Compilation failed\. Can you run build command\?
 ```
 
 </details>
@@ -325,6 +324,7 @@ Exit code `30`.
 ```text
 InvalidCompilation
 solc.*not supported
+Compilation failed\. Can you run build command\?
 ```
 
 </details>

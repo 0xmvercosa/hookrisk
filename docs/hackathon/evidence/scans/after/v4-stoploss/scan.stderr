@@ -1,0 +1,29 @@
+  project: out=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/v4-stoploss/repo/out solc=0.8.19 (artifact-metadata) artifact=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/v4-stoploss/repo/out/StopLoss.sol/StopLoss.json
+  hookrisk: slither src/StopLoss.sol:StopLoss
+  hookrisk: 1 finding(s) in other files, not attributed to this target: src/implementation/StopLossImplementation.sol (1)
+  hookrisk: did not analyse the target — StopLoss uses a hook ABI hookrisk cannot analyse: StopLoss (src/StopLoss.sol#17-205) looks like a Uniswap v4 hook but its hook ABI predates the shipped v4 interface (declares the 2023 getHooksCalls(); callba...
+  hookrisk: 1 finding(s)
+  harness: StopLoss.sol:StopLoss flags=derived-from-runtime maxFee=0bips ctorArgs=1 word(s) run=93f97f75-3a4c-429b-bf5c-a75288c9b501
+  harness: failed — harness setUp failed: TwinPools: getHookPermissions() reverted on the supplied runtime code (not a BaseHook-shaped hook, or the wrong bytecode): 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).
+
+LOW risk  3/33  (undetermined: up to 28/33)
+
+  findings    1 info
+  ✓ hookrisk   ok
+  ✗ harness    failed  harness setUp failed: TwinPools: getHookPermissions() reverted on the supplied runtime code (not a BaseHook-shaped hook, or the wrong bytecode): 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).
+  invariants  I1 inconclusive, I2 inconclusive, I3 inconclusive
+  ! 7 dimension(s) unmeasured: the tier is between Low Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
+  ! trigger 'custom-math' could not be evaluated: dimension 'customMath' is unmeasured
+  ! trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured
+  ! trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured
+  ! trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured
+  ! trigger 'price-impact' could not be evaluated: dimension 'priceImpactingBehavior' is unmeasured
+  ! trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured
+
+  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/v4-stoploss/HOOK_RISK.md
+  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/v4-stoploss/hook-risk.json
+  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/v4-stoploss/hookrisk.sarif
+
+  gate failed
+    - tier is undetermined between Low Risk and High Risk; the upper bound exceeds the configured maximum of medium
+

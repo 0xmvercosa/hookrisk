@@ -276,7 +276,7 @@ async function commandScan(argv: string[]): Promise<number> {
     engineMeta.set('hookrisk', { displayName: 'hookrisk Slither detectors' });
   }
 
-  const { findings, stats } = mergeEngineResults(engineResults);
+  const { findings, stats } = mergeEngineResults(engineResults, log);
 
   // --- score ---
   const rubric = loadRubric();

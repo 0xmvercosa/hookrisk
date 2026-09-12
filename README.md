@@ -269,15 +269,22 @@ Stated here rather than discovered later.
 - **HS-03 through HS-06 and HS-08 are not implemented.** Their dimensions come
   back unmeasured, which is why a first scan usually reports a tier *range*.
   That is the design working, not a placeholder.
-- **The harness needs a hook constructible from `IPoolManager` alone.** Extra
-  constructor arguments are reported as skipped, with the reason.
+- **Hooks with extra constructor arguments need `[harness] constructorArgs`**
+  in `hookrisk.toml` (placeholders `$poolManager`, `$currency0`, `$currency1`,
+  `$owner`, `$hook` are substituted at deploy time). Without it the harness is
+  reported as skipped, with the argument types it needs. Factory-parameter
+  constructors (`Factory(msg.sender).parameters()`) are not supported yet.
 - **I2 allows 200 basis points of drift** between the twin pools. Below that,
   extraction is indistinguishable from tick rounding. Documented in
   [INVARIANTS.md](docs/INVARIANTS.md).
 - **Fork mode and the ecosystem crawler are not built yet.**
-- **The BlockSec container path is unit-tested but has not been exercised
-  end-to-end** — Docker was unavailable on the development machine. The CI job
-  exists; its first green run is the confirmation.
+- **BlockSec HookScan needs three things the published image does not give
+  you.** It is `linux/amd64` only (hookrisk always passes `--platform`), its
+  entrypoint cannot start under Docker Desktop (hookrisk bypasses it), and it
+  ships solc 0.8.14–0.8.24 while v4-core pins 0.8.26 (hookrisk downloads the
+  exact static solc into `~/.cache/hookrisk/solc` and mounts it). With those
+  in place it runs end to end and corroborates HS-01; see
+  [docs/hackathon/evidence/blocksec-corroboration.md](docs/hackathon/evidence/blocksec-corroboration.md).
 
 ---
 

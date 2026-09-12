@@ -5,22 +5,35 @@
   "description": "A risk assessment of one Uniswap v4 hook, bound to one exact deployment.\n\nThe binding is the point. A manifest describes a (chainId, address, codehash) triple, and a manifest whose codehash no longer matches the code at that address describes something that no longer exists. That is why upgradeability raises a hook's tier: an upgradeable hook cannot carry a durable assessment, because any assessment is invalidated by the next upgrade.\n\nEvery number in here says where it came from. `measured` values were observed from code or chain state; `declared` values were asserted by the team; `unmeasured` means nobody knows, which is deliberately not the same as zero.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "generatedBy", "target", "score", "engines"],
-
+  "required": [
+    "schemaVersion",
+    "generatedBy",
+    "target",
+    "score",
+    "engines"
+  ],
   "properties": {
     "schemaVersion": {
       "type": "string",
       "const": "1.0.0",
       "description": "Version of this schema. Consumers should reject unknown majors."
     },
-
     "generatedBy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tool", "version"],
+      "required": [
+        "tool",
+        "version"
+      ],
       "properties": {
-        "tool": { "type": "string", "const": "hookrisk" },
-        "version": { "type": "string", "description": "hookrisk version, e.g. 0.1.0." },
+        "tool": {
+          "type": "string",
+          "const": "hookrisk"
+        },
+        "version": {
+          "type": "string",
+          "description": "hookrisk version, e.g. 0.1.0."
+        },
         "generatedAt": {
           "type": "string",
           "format": "date-time",
@@ -32,23 +45,33 @@
         }
       }
     },
-
     "target": {
       "type": "object",
       "description": "What was assessed. Exactly one of `source` or `deployed` is required; a manifest may carry both when a deployed hook has verified source.",
       "additionalProperties": false,
-      "required": ["mode"],
+      "required": [
+        "mode"
+      ],
       "properties": {
         "mode": {
-          "enum": ["source", "deployed", "deployed-with-source"],
+          "enum": [
+            "source",
+            "deployed",
+            "deployed-with-source"
+          ],
           "description": "`source` scans a local Foundry project. `deployed` works from bytecode at an address. `deployed-with-source` is both, and is the only mode that can reconcile declared permissions against the address bits."
         },
-        "contractName": { "type": "string" },
+        "contractName": {
+          "type": "string"
+        },
         "sourceFile": {
           "type": "string",
           "description": "Project-relative path, e.g. src/MyHook.sol."
         },
-        "chainId": { "type": "integer", "minimum": 1 },
+        "chainId": {
+          "type": "integer",
+          "minimum": 1
+        },
         "address": {
           "type": "string",
           "pattern": "^0x[0-9a-fA-F]{40}$"
@@ -66,18 +89,22 @@
           "type": "boolean",
           "description": "False when the explorer had no verified source. Every finding derived from source analysis is then absent, and findings from bytecode carry reduced confidence."
         },
-        "solcVersion": { "type": "string" },
+        "solcVersion": {
+          "type": "string"
+        },
         "artifactDir": {
           "type": "string",
           "description": "Project-relative directory the compiled artifacts were read from — forge's `out` setting, e.g. `out` or `foundry-out`."
         },
         "projectConfigSource": {
-          "enum": ["forge-config", "fallback"],
+          "enum": [
+            "forge-config",
+            "fallback"
+          ],
           "description": "`forge-config` when artifactDir and solcVersion came from `forge config --json`; `fallback` when forge could not be asked and built-in defaults (`out`, 0.8.26) were assumed."
         }
       }
     },
-
     "permissions": {
       "type": "object",
       "description": "The hook's 14 permission bits, from up to three sources that can disagree — which is the whole subject of detector HS-02.",
@@ -104,15 +131,34 @@
           "description": "The harness's own account of its setUp, from the run record it writes once the twin pools are built.",
           "additionalProperties": false,
           "properties": {
-            "flags": { "type": "integer", "minimum": 0, "description": "The 14-bit flag word the hook was deployed at." },
-            "permissionsDerived": { "type": "boolean", "description": "True when the harness read the flags from the runtime code rather than receiving them." },
-            "customCurve": { "type": "boolean", "description": "beforeSwapReturnDelta was set; I2b replaces I2." },
-            "dynamicFee": { "type": "boolean", "description": "The hooked pool had to be initialised with LPFeeLibrary.DYNAMIC_FEE_FLAG because a static fee reverted." },
+            "flags": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The 14-bit flag word the hook was deployed at."
+            },
+            "permissionsDerived": {
+              "type": "boolean",
+              "description": "True when the harness read the flags from the runtime code rather than receiving them."
+            },
+            "customCurve": {
+              "type": "boolean",
+              "description": "beforeSwapReturnDelta was set; I2b replaces I2."
+            },
+            "dynamicFee": {
+              "type": "boolean",
+              "description": "The hooked pool had to be initialised with LPFeeLibrary.DYNAMIC_FEE_FLAG because a static fee reverted."
+            },
             "seeded": {
-              "enum": ["both", "hooked-failed"],
+              "enum": [
+                "both",
+                "hooked-failed"
+              ],
               "description": "`hooked-failed` means the hook rejected the initial PoolManager liquidity, so the hooked pool has no v4 liquidity and only a custom-curve hook can trade."
             },
-            "hookedSeedRevert": { "type": "string", "description": "Raw revert from the failed seed, wrapper included." }
+            "hookedSeedRevert": {
+              "type": "string",
+              "description": "Raw revert from the failed seed, wrapper included."
+            }
           }
         },
         "divergences": {
@@ -121,10 +167,22 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["permission", "kind"],
+            "required": [
+              "permission",
+              "kind"
+            ],
             "properties": {
-              "permission": { "type": "string", "examples": ["beforeSwap"] },
-              "bit": { "type": "integer", "minimum": 0, "maximum": 13 },
+              "permission": {
+                "type": "string",
+                "examples": [
+                  "beforeSwap"
+                ]
+              },
+              "bit": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 13
+              },
               "kind": {
                 "enum": [
                   "declared-not-implemented",
@@ -133,39 +191,64 @@
                   "returns-delta-without-parent"
                 ]
               },
-              "consequence": { "type": "string" }
+              "consequence": {
+                "type": "string"
+              }
             }
           }
         }
       }
     },
-
     "findings": {
       "type": "array",
-      "items": { "$ref": "#/$defs/finding" }
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
     },
-
     "invariants": {
       "type": "array",
       "description": "Results from the differential harness. Absent when the dynamic layer did not run.",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "status"],
+        "required": [
+          "id",
+          "status"
+        ],
         "properties": {
           "id": {
-            "enum": ["I1", "I2", "I3"],
+            "enum": [
+              "I1",
+              "I2",
+              "I3"
+            ],
             "description": "I1 conservation and solvency, I2 no undeclared extraction, I3 exit liveness."
           },
-          "name": { "type": "string" },
+          "name": {
+            "type": "string"
+          },
           "status": {
-            "enum": ["passed", "failed", "inconclusive", "not-applicable", "skipped"],
+            "enum": [
+              "passed",
+              "failed",
+              "inconclusive",
+              "not-applicable",
+              "skipped"
+            ],
             "description": "`inconclusive` means the run was cut short and is deliberately distinct from `passed`. `not-applicable` is I2 against a custom-curve hook, where output comparison against an unhooked pool is meaningless by construction."
           },
-          "runs": { "type": "integer" },
-          "calls": { "type": "integer" },
-          "reverts": { "type": "integer" },
-          "detail": { "type": "string" },
+          "runs": {
+            "type": "integer"
+          },
+          "calls": {
+            "type": "integer"
+          },
+          "reverts": {
+            "type": "integer"
+          },
+          "detail": {
+            "type": "string"
+          },
           "counterexample": {
             "type": "object",
             "description": "The shrunk sequence that reproduces a failure.",
@@ -177,9 +260,15 @@
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "target": { "type": "string" },
-                    "calldata": { "type": "string" },
-                    "signature": { "type": "string" }
+                    "target": {
+                      "type": "string"
+                    },
+                    "calldata": {
+                      "type": "string"
+                    },
+                    "signature": {
+                      "type": "string"
+                    }
                   }
                 }
               },
@@ -197,11 +286,15 @@
         }
       }
     },
-
     "score": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["total", "tier", "dimensions", "rubric"],
+      "required": [
+        "total",
+        "tier",
+        "dimensions",
+        "rubric"
+      ],
       "properties": {
         "total": {
           "type": "integer",
@@ -213,8 +306,20 @@
           "type": "integer",
           "description": "Total if every unmeasured dimension were at its maximum."
         },
-        "tier": { "enum": ["low", "medium", "high"] },
-        "tierUpperBound": { "enum": ["low", "medium", "high"] },
+        "tier": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "tierUpperBound": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
         "inconclusive": {
           "type": "boolean",
           "description": "True when missing data leaves the tier undetermined between `tier` and `tierUpperBound`."
@@ -222,14 +327,22 @@
         "rubric": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["framework", "revision"],
+          "required": [
+            "framework",
+            "revision"
+          ],
           "properties": {
-            "framework": { "type": "string" },
+            "framework": {
+              "type": "string"
+            },
             "revision": {
               "type": "string",
               "description": "Commit of uniswapfoundation/security-framework this scoring follows. A score is only meaningful against a stated revision."
             },
-            "url": { "type": "string", "format": "uri" }
+            "url": {
+              "type": "string",
+              "format": "uri"
+            }
           }
         },
         "dimensions": {
@@ -239,7 +352,10 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["id", "source"],
+            "required": [
+              "id",
+              "source"
+            ],
             "properties": {
               "id": {
                 "enum": [
@@ -254,22 +370,43 @@
                   "priceImpactingBehavior"
                 ]
               },
-              "name": { "type": "string" },
+              "name": {
+                "type": "string"
+              },
               "value": {
-                "type": ["integer", "null"],
+                "type": [
+                  "integer",
+                  "null"
+                ],
                 "description": "Null when unmeasured."
               },
-              "max": { "type": "integer" },
+              "max": {
+                "type": "integer"
+              },
               "source": {
-                "enum": ["measured", "declared", "unmeasured"],
+                "enum": [
+                  "measured",
+                  "declared",
+                  "unmeasured"
+                ],
                 "description": "`measured` was observed by hookrisk. `declared` was asserted by the team and cannot be checked. Conflating the two is how a self-assessment acquires unearned authority."
               },
-              "bracketLabel": { "type": ["string", "null"] },
+              "bracketLabel": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "bracketsAreInterpretation": {
                 "type": "boolean",
                 "description": "True when hookrisk supplies the brackets because the framework publishes none for this dimension. Seven of nine are in this state; see FEEDBACK.md #2."
               },
-              "evidence": { "type": "array", "items": { "type": "string" } }
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             }
           }
         },
@@ -279,7 +416,10 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["id", "firedBy"],
+            "required": [
+              "id",
+              "firedBy"
+            ],
             "properties": {
               "id": {
                 "enum": [
@@ -292,8 +432,15 @@
                   "tvl-5"
                 ]
               },
-              "name": { "type": "string" },
-              "firedBy": { "type": "array", "items": { "type": "string" } },
+              "name": {
+                "type": "string"
+              },
+              "firedBy": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
               "derivationIsInterpretation": {
                 "type": "boolean",
                 "description": "True when the dimension-to-trigger link is hookrisk's reading rather than the framework's. See FEEDBACK.md #5."
@@ -306,12 +453,24 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["action", "strength"],
+            "required": [
+              "action",
+              "strength"
+            ],
             "properties": {
-              "action": { "type": "string" },
-              "label": { "type": "string" },
+              "action": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
               "strength": {
-                "enum": ["optional", "recommended", "strongly-recommended", "required"]
+                "enum": [
+                  "optional",
+                  "recommended",
+                  "strongly-recommended",
+                  "required"
+                ]
               },
               "sources": {
                 "type": "array",
@@ -320,19 +479,29 @@
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "from": { "type": "string" },
-                    "strength": { "type": "string" },
-                    "detail": { "type": "string" }
+                    "from": {
+                      "type": "string"
+                    },
+                    "strength": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    }
                   }
                 }
               }
             }
           }
         },
-        "warnings": { "type": "array", "items": { "type": "string" } }
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
-
     "engines": {
       "type": "array",
       "description": "Every analysis engine hookrisk attempted, including those that were skipped. A skipped engine is recorded so a reader can tell 'nothing was found' apart from 'nothing looked'.",
@@ -340,28 +509,58 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["engine", "status"],
+        "required": [
+          "engine",
+          "status"
+        ],
         "properties": {
-          "engine": { "type": "string", "examples": ["hookrisk", "blocksec", "harness"] },
-          "displayName": { "type": "string" },
-          "version": { "type": "string" },
-          "status": { "enum": ["ok", "skipped", "failed"] },
-          "reason": { "type": "string" },
-          "findingCount": { "type": "integer" },
-          "durationMs": { "type": "integer" },
+          "engine": {
+            "type": "string",
+            "examples": [
+              "hookrisk",
+              "blocksec",
+              "harness"
+            ]
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "skipped",
+              "failed"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "findingCount": {
+            "type": "integer"
+          },
+          "durationMs": {
+            "type": "integer"
+          },
           "upstream": {
             "type": "object",
             "description": "Attribution for third-party engines. Running someone else's tool and saying so is the minimum.",
             "additionalProperties": false,
             "properties": {
-              "url": { "type": "string", "format": "uri" },
-              "license": { "type": "string" }
+              "url": {
+                "type": "string",
+                "format": "uri"
+              },
+              "license": {
+                "type": "string"
+              }
             }
           }
         }
       }
     },
-
     "coverage": {
       "type": "object",
       "description": "What the analysis did and did not reach. Reporting a clean scan without this is how a tool converts its own blind spots into false assurance.",
@@ -378,67 +577,139 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "contract": { "type": "string" },
-              "function": { "type": "string" },
-              "reason": { "type": "string" }
+              "contract": {
+                "type": "string"
+              },
+              "function": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
             }
           }
         },
-        "staticAnalysisSkipped": { "type": "boolean" },
+        "staticAnalysisSkipped": {
+          "type": "boolean"
+        },
         "dynamicAnalysisSkipped": {
           "type": "boolean",
           "description": "True whenever the differential harness produced no invariant results — because it was skipped with --skip-dynamic, declined to run, or failed. Never false unless the invariants were actually measured."
         },
         "harnessStatus": {
-          "enum": ["ok", "skipped", "failed"],
+          "enum": [
+            "ok",
+            "skipped",
+            "failed"
+          ],
           "description": "Mirrors the harness engine row. `failed` means the harness started and could not complete (setUp reverted, forge crashed); the invariants are then `inconclusive`, not `passed`."
         }
       }
     },
-
     "gate": {
       "type": "object",
       "description": "Outcome of the CI gate, when one was configured.",
       "additionalProperties": false,
       "properties": {
-        "passed": { "type": "boolean" },
-        "maxTier": { "enum": ["low", "medium", "high"] },
-        "maxSeverity": { "$ref": "#/$defs/severity" },
-        "failures": { "type": "array", "items": { "type": "string" } }
+        "passed": {
+          "type": "boolean"
+        },
+        "maxTier": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "maxSeverity": {
+          "$ref": "#/$defs/severity"
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     }
   },
-
   "$defs": {
-    "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
-    "confidence": { "enum": ["low", "medium", "high"] },
-
+    "severity": {
+      "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "confidence": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
     "permissionSet": {
       "type": "object",
       "additionalProperties": false,
       "description": "The 14 hook permissions. Field names match Hooks.Permissions in v4-core.",
       "properties": {
-        "beforeInitialize": { "type": "boolean" },
-        "afterInitialize": { "type": "boolean" },
-        "beforeAddLiquidity": { "type": "boolean" },
-        "afterAddLiquidity": { "type": "boolean" },
-        "beforeRemoveLiquidity": { "type": "boolean" },
-        "afterRemoveLiquidity": { "type": "boolean" },
-        "beforeSwap": { "type": "boolean" },
-        "afterSwap": { "type": "boolean" },
-        "beforeDonate": { "type": "boolean" },
-        "afterDonate": { "type": "boolean" },
-        "beforeSwapReturnDelta": { "type": "boolean" },
-        "afterSwapReturnDelta": { "type": "boolean" },
-        "afterAddLiquidityReturnDelta": { "type": "boolean" },
-        "afterRemoveLiquidityReturnDelta": { "type": "boolean" }
+        "beforeInitialize": {
+          "type": "boolean"
+        },
+        "afterInitialize": {
+          "type": "boolean"
+        },
+        "beforeAddLiquidity": {
+          "type": "boolean"
+        },
+        "afterAddLiquidity": {
+          "type": "boolean"
+        },
+        "beforeRemoveLiquidity": {
+          "type": "boolean"
+        },
+        "afterRemoveLiquidity": {
+          "type": "boolean"
+        },
+        "beforeSwap": {
+          "type": "boolean"
+        },
+        "afterSwap": {
+          "type": "boolean"
+        },
+        "beforeDonate": {
+          "type": "boolean"
+        },
+        "afterDonate": {
+          "type": "boolean"
+        },
+        "beforeSwapReturnDelta": {
+          "type": "boolean"
+        },
+        "afterSwapReturnDelta": {
+          "type": "boolean"
+        },
+        "afterAddLiquidityReturnDelta": {
+          "type": "boolean"
+        },
+        "afterRemoveLiquidityReturnDelta": {
+          "type": "boolean"
+        }
       }
     },
-
     "finding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "ruleClass", "title", "severity", "confidence", "engines"],
+      "required": [
+        "id",
+        "ruleClass",
+        "title",
+        "severity",
+        "confidence",
+        "engines"
+      ],
       "properties": {
         "id": {
           "type": "string",
@@ -461,9 +732,15 @@
           ],
           "description": "Canonical taxonomy shared across engines, so the same defect found by two tools is one finding rather than two. `callback-intentionally-disabled` and `unsupported-hook-abi` are classifications (INFO): a callback overridden with a deliberate revert to disable a PoolManager-routed operation, and a contract that looks like a v4 hook but uses an ABI hookrisk cannot analyse."
         },
-        "title": { "type": "string" },
-        "description": { "type": "string" },
-        "severity": { "$ref": "#/$defs/severity" },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
         "confidence": {
           "$ref": "#/$defs/confidence",
           "description": "Promoted to `high` when engines built on different analysis foundations agree."
@@ -473,44 +750,92 @@
           "description": "True for findings that describe a design choice rather than a defect, such as custom accounting. These affect scoring; they are not things to fix."
         },
         "location": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
           "properties": {
-            "file": { "type": "string" },
-            "line": { "type": "integer", "minimum": 1 },
-            "endLine": { "type": "integer" }
+            "file": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "endLine": {
+              "type": "integer"
+            }
           }
         },
         "function": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "name": { "type": "string" },
-            "selector": { "type": "string", "pattern": "^0x[0-9a-fA-F]{8}$" }
+            "name": {
+              "type": "string"
+            },
+            "selector": {
+              "type": "string",
+              "pattern": "^0x[0-9a-fA-F]{8}$"
+            }
           }
         },
-        "evidence": { "type": "array", "items": { "type": "string" } },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "engines": {
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["engine", "nativeRule"],
+            "required": [
+              "engine",
+              "nativeRule"
+            ],
             "properties": {
-              "engine": { "type": "string" },
+              "engine": {
+                "type": "string"
+              },
               "nativeRule": {
                 "type": "string",
                 "description": "The engine's own rule name, kept so a user can trace a finding back to its source tool."
               },
-              "severity": { "$ref": "#/$defs/severity" },
-              "confidence": { "$ref": "#/$defs/confidence" }
+              "severity": {
+                "$ref": "#/$defs/severity"
+              },
+              "confidence": {
+                "$ref": "#/$defs/confidence"
+              }
             }
           }
         },
-        "informsDimensions": { "type": "array", "items": { "type": "string" } },
-        "informsTriggers": { "type": "array", "items": { "type": "string" } },
-        "references": { "type": "array", "items": { "type": "string" } }
+        "informsDimensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "informsTriggers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "discriminator": {
+          "type": "string",
+          "description": "Distinguishes findings of one class anchored on the same element, e.g. the permission field for HS-02 or the callback name for HS-01."
+        }
       }
     }
   }

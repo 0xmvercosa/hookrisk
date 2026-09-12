@@ -25,15 +25,12 @@
     "'hookrisk itself broke'. Exit code 2 is reserved for 'scan completed and the",
     "risk gate failed', which is a successful run, not an error."
   ],
-
   "version": 1,
-
   "reserved": {
     "0": "scan completed, gate passed",
     "1": "uncaught internal crash (never emitted deliberately)",
     "2": "scan completed, risk gate failed — this is a result, not an error"
   },
-
   "errors": [
     {
       "code": "HR-E001",
@@ -46,7 +43,10 @@
         "Verify with `forge --version`. hookrisk requires 1.0.0 or newer.",
         "In CI, use `foundry-rs/foundry-toolchain@v1` before calling hookrisk."
       ],
-      "match": ["forge: command not found", "No such file or directory: 'forge'"]
+      "match": [
+        "forge: command not found",
+        "No such file or directory: 'forge'"
+      ]
     },
     {
       "code": "HR-E002",
@@ -60,7 +60,10 @@
         "Verify with `slither --list-detectors | grep hookrisk`.",
         "To deliberately score without static analysis, pass `--skip-static`. The manifest records `staticAnalysis.skipped: true` and the affected dimensions are reported as unmeasured, never as zero."
       ],
-      "match": ["slither: command not found", "No module named 'slither'"]
+      "match": [
+        "slither: command not found",
+        "No module named 'slither'"
+      ]
     },
     {
       "code": "HR-E003",
@@ -72,7 +75,10 @@
         "Confirm the interpreter Slither actually uses: `slither --version` then `python3 -c 'import sys; print(sys.version)'`.",
         "A pipx install pins its own interpreter, which is usually the cleanest fix on macOS where the system Python is old."
       ],
-      "match": ["requires Python >=3\\.", "SyntaxError.*match"]
+      "match": [
+        "requires Python >=3\\.",
+        "SyntaxError.*match"
+      ]
     },
     {
       "code": "HR-E004",
@@ -85,7 +91,10 @@
         "With pipx, inject rather than install: `pipx inject slither-analyzer ./detectors`.",
         "Editable installs (`pip install -e ./detectors`) do register entry points, but only after the environment is restarted."
       ],
-      "match": ["No detector found matching", "Unknown detector: HS-"]
+      "match": [
+        "No detector found matching",
+        "Unknown detector: HS-"
+      ]
     },
     {
       "code": "HR-E101",
@@ -98,7 +107,10 @@
         "See docs/SCORING.md for which dimensions hookrisk measures and which it cannot.",
         "There is deliberately no default. See FEEDBACK.md #3 for why defaulting these would undermine the framework."
       ],
-      "match": ["missing declared dimension", "hookrisk\\.toml.*required"]
+      "match": [
+        "missing declared dimension",
+        "hookrisk\\.toml.*required"
+      ]
     },
     {
       "code": "HR-E102",
@@ -111,7 +123,10 @@
         "If the contract name is omitted and the file declares exactly one contract, hookrisk uses it; if the file declares several, name the one you mean.",
         "Run `hookrisk targets src/MyHook.sol` to list the contracts hookrisk can see in a file."
       ],
-      "match": ["could not resolve target", "ambiguous contract name"]
+      "match": [
+        "could not resolve target",
+        "ambiguous contract name"
+      ]
     },
     {
       "code": "HR-E103",
@@ -123,7 +138,10 @@
         "If the hook charges no fee of its own, set it to 0 explicitly — that is a much stronger assertion and hookrisk will hold you to it.",
         "If the hook implements a custom curve (a returns-delta permission), I2 does not apply; hookrisk substitutes price monotonicity plus I1 and I3. See docs/INVARIANTS.md."
       ],
-      "match": ["maxFeeBps.*not declared", "no declared fee bound"]
+      "match": [
+        "maxFeeBps.*not declared",
+        "no declared fee bound"
+      ]
     },
     {
       "code": "HR-E201",
@@ -140,7 +158,9 @@
         "AssertionError: Contract \\w+ not found",
         "Failed to resolved name for reference id"
       ],
-      "seeAlso": ["https://github.com/crytic/crytic-compile"]
+      "seeAlso": [
+        "https://github.com/crytic/crytic-compile"
+      ]
     },
     {
       "code": "HR-E202",
@@ -153,8 +173,7 @@
         "If your project genuinely keeps tests beside sources, pass `--foundry-compile-all` so crytic-compile omits the skip flags."
       ],
       "match": [
-        "build-info is not a directory",
-        "Compilation failed\\. Can you run build command\\?"
+        "build-info is not a directory"
       ]
     },
     {
@@ -168,7 +187,11 @@
         "Try `--ignore-compile` after a manual `forge build --build-info` so Slither reuses your artifacts instead of rebuilding.",
         "If it still fails, `--skip-static` produces a manifest from the harness alone, with every static dimension marked unmeasured."
       ],
-      "match": ["InvalidCompilation", "solc.*not supported"]
+      "match": [
+        "InvalidCompilation",
+        "solc.*not supported",
+        "Compilation failed\\. Can you run build command\\?"
+      ]
     },
     {
       "code": "HR-E205",
@@ -186,7 +209,9 @@
         "Impossible to generate IR for",
         "ContractSolcParsing"
       ],
-      "seeAlso": ["https://github.com/crytic/slither/issues"]
+      "seeAlso": [
+        "https://github.com/crytic/slither/issues"
+      ]
     },
     {
       "code": "HR-E204",
@@ -199,7 +224,10 @@
         "hookrisk falls back to Sourcify automatically when the explorer has nothing.",
         "Pass `--require-source` to make this a hard error instead, which is the right setting for a CI gate on your own contracts."
       ],
-      "match": ["source not verified", "Contract source code not verified"]
+      "match": [
+        "source not verified",
+        "Contract source code not verified"
+      ]
     },
     {
       "code": "HR-E301",
@@ -212,7 +240,10 @@
         "If the hook's constructor calls `Hooks.validateHookPermissions`, it will revert at a mismatched address; that revert is the intended behaviour and the finding is real.",
         "See docs/INVARIANTS.md for how the twin pools are constructed."
       ],
-      "match": ["deployCodeTo.*failed", "HookAddressNotValid"]
+      "match": [
+        "deployCodeTo.*failed",
+        "HookAddressNotValid"
+      ]
     },
     {
       "code": "HR-E302",
@@ -225,7 +256,10 @@
         "I3 failures mean a liquidity provider could not withdraw. Treat as critical until proven otherwise.",
         "I2 failures may be a missing or understated `maxFeeBps` declaration rather than a bug — check the declaration first, and if the fee is real and intended, declare it."
       ],
-      "match": ["Invariant .* FAILED", "invariant_\\w+.*failed"]
+      "match": [
+        "Invariant .* FAILED",
+        "invariant_\\w+.*failed"
+      ]
     },
     {
       "code": "HR-E303",
@@ -238,7 +272,10 @@
         "Partial results are still written; the manifest marks the affected invariants `inconclusive`, which is deliberately not the same as `passed`.",
         "For a pre-deployment run use `FOUNDRY_PROFILE=deep` locally rather than widening the CI budget."
       ],
-      "match": ["timed out", "TIMEOUT"]
+      "match": [
+        "timed out",
+        "TIMEOUT"
+      ]
     },
     {
       "code": "HR-E304",
@@ -251,8 +288,13 @@
         "A hook that reverts on a static LP fee is retried with `LPFeeLibrary.DYNAMIC_FEE_FLAG`; a revert on both means the hook's `beforeInitialize` needs state the harness does not provide.",
         "Reproduce in isolation: `HOOKRISK_ARTIFACT=... forge test --match-contract GenericHookInvariants -vvvv` inside harness/, with the same environment the CLI logs under `--verbose`."
       ],
-      "match": ["harness setUp failed", "setUp\\(\\).*Failure"],
-      "seeAlso": ["docs/INVARIANTS.md"]
+      "match": [
+        "harness setUp failed",
+        "setUp\\(\\).*Failure"
+      ],
+      "seeAlso": [
+        "docs/INVARIANTS.md"
+      ]
     },
     {
       "code": "HR-E305",
@@ -265,8 +307,13 @@
         "Write every other value the way `cast abi-encode` accepts it — decimal integers, 0x-prefixed addresses and bytes, `true`/`false`. The values are passed to cast verbatim; a cast parse error is repeated in the skip reason.",
         "Struct (tuple) constructor arguments are not supported yet; the skip reason says so when that is the case."
       ],
-      "match": ["constructorArgs", "constructor takes .* argument"],
-      "seeAlso": ["docs/INVARIANTS.md"]
+      "match": [
+        "constructorArgs",
+        "constructor takes .* argument"
+      ],
+      "seeAlso": [
+        "docs/INVARIANTS.md"
+      ]
     },
     {
       "code": "HR-E401",
@@ -279,7 +326,11 @@
         "Verify independently: `cast block-number --rpc-url $BASE_RPC_URL`.",
         "Source-mode scanning needs no RPC at all — omit `--chain` to stay offline."
       ],
-      "match": ["missing RPC", "could not connect", "ECONNREFUSED"]
+      "match": [
+        "missing RPC",
+        "could not connect",
+        "ECONNREFUSED"
+      ]
     },
     {
       "code": "HR-E402",
@@ -292,7 +343,11 @@
         "Sourcify is tried automatically when the explorer returns nothing, and needs no key.",
         "Use `--cache-dir` to reuse fetched sources across runs instead of re-fetching."
       ],
-      "match": ["Max rate limit reached", "Invalid API Key", "NOTOK"]
+      "match": [
+        "Max rate limit reached",
+        "Invalid API Key",
+        "NOTOK"
+      ]
     },
     {
       "code": "HR-E403",
@@ -305,7 +360,10 @@
         "Publish an upgrade policy and re-scan as part of it — the framework's Upgradeable trigger requires this anyway.",
         "For reproducible reporting, pin a block: `--block <number>`."
       ],
-      "match": ["codehash mismatch", "code changed during scan"]
+      "match": [
+        "codehash mismatch",
+        "code changed during scan"
+      ]
     },
     {
       "code": "HR-E501",
@@ -317,7 +375,10 @@
         "Attach the rejected manifest: it is written to `hook-risk.invalid.json` for exactly this purpose.",
         "As a workaround, `--no-validate` emits it regardless. Do not feed the result to a gate."
       ],
-      "match": ["schema validation failed", "does not match schema"]
+      "match": [
+        "schema validation failed",
+        "does not match schema"
+      ]
     },
     {
       "code": "HR-E502",
@@ -330,7 +391,10 @@
         "To report without gating, pass `--no-gate`; the manifest is still produced.",
         "A rising tier after a code change is the tool working. Re-scoring downward without changing the code is the failure mode the framework warns about."
       ],
-      "match": ["gate failed", "tier exceeds"]
+      "match": [
+        "gate failed",
+        "tier exceeds"
+      ]
     },
     {
       "code": "HR-E901",

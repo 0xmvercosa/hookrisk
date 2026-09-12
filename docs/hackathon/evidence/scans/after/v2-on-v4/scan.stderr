@@ -1,0 +1,28 @@
+  project: out=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/v2-on-v4/repo/out solc=0.8.24 (forge-config) artifact=/private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/hooks/v2-on-v4/repo/out/V2PairHook.sol/V2PairHook.json
+  hookrisk: slither src/V2PairHook.sol:V2PairHook
+  hookrisk: 2 finding(s) in other files, not attributed to this target: src/BaseHook.sol (2)
+  hookrisk: did not analyse the target — V2PairHook uses a hook ABI hookrisk cannot analyse: V2PairHook (src/V2PairHook.sol#21-284) implements afterAddLiquidity, afterInitialize, afterRemoveLiquidity, beforeAddLiquidity, beforeInitialize, beforeRemov...
+  hookrisk: 3 finding(s)
+  harness: V2PairHook.sol:V2PairHook flags=0x28cc maxFee=30bips ctorArgs=none (custom curve: I2 -> monotonicity) run=76c16851-752f-4938-adb6-a0ca9890517a
+  harness: failed — harness setUp failed: TwinPools: hook constructor reverted: 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).
+
+MEDIUM risk  10/33  (undetermined: up to 22/33)
+
+  findings    1 high, 2 info
+  ✓ hookrisk   ok
+  ✗ harness    failed  harness setUp failed: TwinPools: hook constructor reverted: 0x. The twin pools could not be built, so no sequence ran and nothing about the hook was observed (HR-E304).
+  invariants  I1 inconclusive, I2 inconclusive, I3 inconclusive
+  ! 4 dimension(s) unmeasured: the tier is between Medium Risk and High Risk. Unmeasured dimensions are excluded from the total, never counted as zero.
+  ! trigger 'holds-liquidity' could not be evaluated: dimension 'externalLiquidityExposure' is unmeasured
+  ! trigger 'external-dependencies' could not be evaluated: dimension 'externalDependencies' is unmeasured
+  ! trigger 'autonomous' could not be evaluated: dimension 'autonomousParameterUpdates' is unmeasured
+  ! trigger 'upgradeable' could not be evaluated: dimension 'upgradeability' is unmeasured
+
+  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/v2-on-v4/HOOK_RISK.md
+  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/v2-on-v4/hook-risk.json
+  /private/tmp/claude-501/-Users-rafaelzochling-gitrepos-external-hookrisk/fe92e33d-04a3-4e07-8d2b-dc6ec02f1fac/scratchpad/evidence-after/v2-on-v4/hookrisk.sarif
+
+  gate failed
+    - tier is undetermined between Medium Risk and High Risk; the upper bound exceeds the configured maximum of medium
+    - 1 finding(s) at or above high: V2PairHook.afterSwap(address,PoolKey,IPoolManager.SwapParams,BalanceDelta,bytes) (src/V2PairHook.sol#196-207) is an IHooks callback (0xb47b2fb1) that never c...
+
